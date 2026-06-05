@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "BudgetApp",
+    "name": "我的島",
     "slug": "BudgetApp",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -11,15 +11,36 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#E8EAF0",
         "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.siant30808.BudgetApp"
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#E2E8F0"
+    },
+    "plugins": [
+      "expo-sharing",
+      "expo-image",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "選取背景圖片需要存取您的相簿"
+        }
+      ],
+      "expo-document-picker"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "cc2f1b74-e7bf-4494-9fe9-d56620cc4f9a"
+      }
     }
   }
 }

@@ -3,13 +3,26 @@
   "version": "1.0.0",
   "main": "index.ts",
   "dependencies": {
+    "@expo/vector-icons": "^15.0.2",
+    "@shopify/react-native-skia": "2.6.2",
     "expo": "~56.0.8",
+    "expo-document-picker": "~56.0.4",
+    "expo-file-system": "~56.0.7",
+    "expo-image": "~56.0.9",
+    "expo-image-picker": "~56.0.15",
+    "expo-sharing": "~56.0.15",
     "expo-status-bar": "~56.0.4",
     "react": "19.2.3",
-    "react-native": "0.85.3"
+    "react-native": "0.85.3",
+    "react-native-mmkv": "^2.12.2",
+    "react-native-nitro-modules": "^0.35.9",
+    "react-native-reanimated": "4.3.1",
+    "xlsx": "^0.18.5",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
+    "babel-preset-expo": "^56.0.14",
     "typescript": "~6.0.3"
   },
   "scripts": {
