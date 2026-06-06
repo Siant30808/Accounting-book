@@ -1,32 +1,33 @@
 import { create } from 'zustand';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   Transaction, AppSettings, BgSettings, FabPosition,
   DEFAULT_SETTINGS, STORAGE_KEYS, Period,
 } from '../types';
 import { currentPeriod, getPeriod, getAllPeriods, inPeriod } from '../utils/period';
 
-// ── MMKV 持久化儲存 ──
-import { MMKV } from 'react-native-mmkv';
-const storage = new MMKV();
-
-function readJSON<T>(key: string, fallback: T): T {
+// ── AsyncStorage 讀寫工具 ──
+async function readJSON<T>(key: string, fallback: T): Promise<T> {
   try {
-    const raw = storage.getString(key);
-    return raw ? (JSON.parse(raw) as T) : fallback;
+    const raw = await AsyncStorage.getItem(key);
+    if (raw === null) return fallback;
+    return JSON.parse(raw) as T;
   } catch {
     return fallback;
   }
 }
 
 function writeJSON<T>(key: string, value: T): void {
-  storage.set(key, JSON.stringify(value));
+  AsyncStorage.setItem(key, JSON.stringify(value)).catch(() => {});
 }
 
+// ── Store 型別 ──
 interface BudgetState {
   transactions: Transaction[];
   settings:     AppSettings;
   bgSettings:   BgSettings;
   fabPosition:  FabPosition | null;
+  hydrated:     boolean;
 
   addTransaction:     (tx: Omit<Transaction, 'id'>) => void;
   deleteTransaction:  (id: number) => void;
@@ -45,22 +46,14 @@ interface BudgetState {
   checkPeriodRollover: () => string | null;
 }
 
-// ── 初始資料 ──
-const initTxs: Transaction[] = readJSON(STORAGE_KEYS.TRANSACTIONS, []);
-const initSettings: AppSettings = {
-  ...DEFAULT_SETTINGS,
-  ...readJSON<Partial<AppSettings>>(STORAGE_KEYS.SETTINGS, {}),
-};
-initSettings.payday  = Math.min(28, Math.max(1, parseInt(String(initSettings.payday))  || 5));
-initSettings.budget  = parseInt(String(initSettings.budget))   || 15000;
-initSettings.savings = parseFloat(String(initSettings.savings)) || 0;
-if (!initSettings.periodBalances) initSettings.periodBalances = {};
+const DEFAULT_BG: BgSettings = { opacity: 100, fileUri: null };
 
 export const useBudgetStore = create<BudgetState>((set, get) => ({
-  transactions: initTxs,
-  settings:     initSettings,
-  bgSettings:   readJSON(STORAGE_KEYS.BG_SETTINGS, { opacity: 100, fileUri: null }),
-  fabPosition:  readJSON<FabPosition | null>(STORAGE_KEYS.FAB_POS, null),
+  transactions: [],
+  settings:     { ...DEFAULT_SETTINGS },
+  bgSettings:   DEFAULT_BG,
+  fabPosition:  null,
+  hydrated:     false,
 
   // ── 明細操作 ──
   addTransaction: (tx) => {
@@ -80,7 +73,9 @@ export const useBudgetStore = create<BudgetState>((set, get) => ({
     let added = 0;
     const merged = [...existing];
     incoming.forEach(tx => {
-      const isDup = existing.some(e => e.date === tx.date && e.cat === tx.cat && e.amount === tx.amount);
+      const isDup = existing.some(
+        e => e.date === tx.date && e.cat === tx.cat && e.amount === tx.amount,
+      );
       if (!isDup) { merged.push({ ...tx, id: Date.now() + added }); added++; }
     });
     merged.sort((a, b) => b.date.localeCompare(a.date));
@@ -124,37 +119,33 @@ export const useBudgetStore = create<BudgetState>((set, get) => ({
 
   getPeriodTxs: (p) => get().transactions.filter(t => inPeriod(t.date, p)),
 
-  // ── 自動跨期結算（支援跳期補算）──
+  // ── 自動跨期結算 ──
   checkPeriodRollover: () => {
     try {
       const { settings, transactions } = get();
       const p         = currentPeriod(settings.payday);
       const lastStart = settings.lastPeriodStart;
 
-      // 首次啟動：初始化週期記錄
       if (!lastStart) {
         get().saveSettings({ lastPeriodStart: p.startStr, lastPeriodEnd: p.endStr });
         return null;
       }
 
-      // 同一週期：不需要任何動作
       if (lastStart === p.startStr) return null;
 
-      // 跨週期（可能跨多期）：由舊到新逐期結算
-      // getAllPeriods 已含當期；篩出 >= lastStart 且 < 當期 的所有待結算期
       const allP   = getAllPeriods(transactions.map(t => t.date), settings.payday)
-                       .slice().reverse();                     // 由舊到新
+                       .slice().reverse();
       const missed = allP.filter(q => q.startStr >= lastStart && q.startStr < p.startStr);
 
-      let runSavings   = settings.savings;
+      let runSavings    = settings.savings;
       const newBalances = { ...settings.periodBalances };
 
       for (const mp of missed) {
-        newBalances[mp.startStr] = runSavings;                 // 鎖定該期月初
+        newBalances[mp.startStr] = runSavings;
         const mpTxs  = transactions.filter(t => t.date >= mp.startStr && t.date <= mp.endStr);
         const mpInc  = mpTxs.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
         const mpCash = mpTxs.filter(t => t.type === 'expense' && t.pay === '現金').reduce((s, t) => s + t.amount, 0);
-        runSavings   = runSavings + (mpInc - mpCash);          // 本期月底 = 下期月初
+        runSavings   = runSavings + (mpInc - mpCash);
       }
 
       get().saveSettings({
@@ -171,3 +162,36 @@ export const useBudgetStore = create<BudgetState>((set, get) => ({
     }
   },
 }));
+
+// ── 從 AsyncStorage 載入所有資料（App 啟動時呼叫一次）──
+export async function hydrateStore(): Promise<void> {
+  try {
+    const [txRaw, setRaw, bgRaw, fabRaw] = await AsyncStorage.multiGet([
+      STORAGE_KEYS.TRANSACTIONS,
+      STORAGE_KEYS.SETTINGS,
+      STORAGE_KEYS.BG_SETTINGS,
+      STORAGE_KEYS.FAB_POS,
+    ]);
+
+    const txs        = txRaw[1]  ? JSON.parse(txRaw[1])  as Transaction[]        : [];
+    const rawSetting = setRaw[1] ? JSON.parse(setRaw[1]) as Partial<AppSettings> : {};
+    const bgSettings = bgRaw[1]  ? JSON.parse(bgRaw[1])  as BgSettings           : DEFAULT_BG;
+    const fabPosition = fabRaw[1] ? JSON.parse(fabRaw[1]) as FabPosition         : null;
+
+    const settings: AppSettings = { ...DEFAULT_SETTINGS, ...rawSetting };
+    settings.payday  = Math.min(28, Math.max(1, parseInt(String(settings.payday))  || 5));
+    settings.budget  = parseInt(String(settings.budget))   || 15000;
+    settings.savings = parseFloat(String(settings.savings)) || 0;
+    if (!settings.periodBalances) settings.periodBalances = {};
+
+    useBudgetStore.setState({
+      transactions: txs,
+      settings,
+      bgSettings,
+      fabPosition,
+      hydrated: true,
+    });
+  } catch {
+    useBudgetStore.setState({ hydrated: true });
+  }
+}

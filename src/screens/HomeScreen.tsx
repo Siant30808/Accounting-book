@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, Pressable,
-  Modal, TextInput, KeyboardAvoidingView,
+  Modal, TextInput, KeyboardAvoidingView, Keyboard,
   Platform, SafeAreaView, StatusBar, ImageBackground,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { Feather } from '@expo/vector-icons';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import * as DocumentPicker from 'expo-document-picker';
 import { useBudgetStore }       from '../store/useBudgetStore';
 import { SkiaPieChart, ChartSlice } from '../components/SkiaPieChart';
@@ -123,12 +124,13 @@ export function HomeScreen() {
   const [showAddModal,     setShowAddModal]     = useState(false);
   const [showSavingsModal, setShowSavingsModal] = useState(false);
   const [deleteTargetId,   setDeleteTargetId]   = useState<number | null>(null);
-  const [addType,  setAddType]  = useState<'expense' | 'income'>('expense');
-  const [addPay,   setAddPay]   = useState<'現金' | '信用卡'>('現金');
-  const [addCat,   setAddCat]   = useState('餐飲');
-  const [addAmt,   setAddAmt]   = useState('');
-  const [addNote,  setAddNote]  = useState('');
-  const [addDate,  setAddDate]  = useState(localDateStr(new Date()));
+  const [addType,      setAddType]      = useState<'expense' | 'income'>('expense');
+  const [addPay,       setAddPay]       = useState<'現金' | '信用卡'>('現金');
+  const [addCat,       setAddCat]       = useState('餐飲');
+  const [addAmt,       setAddAmt]       = useState('');
+  const [addNote,      setAddNote]      = useState('');
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [savingsInput, setSavingsInput] = useState('');
   const [toast,    setToast]    = useState('');
 
@@ -146,7 +148,7 @@ export function HomeScreen() {
 
   const openAddModal = useCallback((type: 'expense' | 'income' = 'expense') => {
     setAddType(type); setAddPay('現金');
-    setAddDate(localDateStr(new Date()));
+    setSelectedDate(new Date());
     setAddAmt(''); setAddNote('');
     setAddCat(type === 'expense' ? '餐飲' : '薪資');
     setShowAddModal(true);
@@ -156,11 +158,13 @@ export function HomeScreen() {
     const amount = parseFloat(addAmt);
     if (!amount || amount <= 0) { showToast('❌ 請輸入有效金額'); return; }
     const now = new Date();
+    const d = selectedDate;
+    const dateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     addTransaction({
       type:   addType,
       cat:    addCat as Transaction['cat'],
       amount,
-      date:   addDate.replace(/\//g, '-'),
+      date:   dateStr,
       time:   `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`,
       pay:    addType === 'expense' ? addPay : '—',
       note:   addNote.trim(),
@@ -168,7 +172,7 @@ export function HomeScreen() {
     setShowAddModal(false);
     setAddAmt(''); setAddNote('');
     showToast(`✅ ${addType === 'expense' ? (addPay === '信用卡' ? '💳 刷卡' : '💵 現金') + '記帳' : '💵 收入'}成功`);
-  }, [addAmt, addType, addCat, addDate, addPay, addNote]);
+  }, [addAmt, addType, addCat, selectedDate, addPay, addNote]);
 
   const handleExport = useCallback(async () => {
     showToast('⏳ 產生報表中…');
@@ -197,7 +201,7 @@ export function HomeScreen() {
 
   // 問候語 & 日期標頭（只依賴 today，不需隨 txs 重算）
   const { greeting, headerDate } = useMemo(() => {
-    const h = today.getHours();
+    const h = new Date().getHours();
     const greeting = h < 6 ? '夜深了，注意休息！🌙'
       : h < 12 ? '早安！今天也要加油☀️'
       : h < 18 ? '下午好，記得記帳'
@@ -455,13 +459,19 @@ export function HomeScreen() {
         visible={showAddModal}
         animationType="slide"
         transparent
-        onRequestClose={() => setShowAddModal(false)}
+        onRequestClose={() => {
+          Keyboard.dismiss();
+          setTimeout(() => setShowAddModal(false), 50);
+        }}
       >
-        <Pressable style={styles.overlay} onPress={() => setShowAddModal(false)} />
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.modalSlide}
+          style={{ flex: 1, justifyContent: 'flex-end' }}
         >
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => {
+            Keyboard.dismiss();
+            setTimeout(() => setShowAddModal(false), 50);
+          }} />
           <View style={styles.modalBox}>
             {/* 類型切換 */}
             <View style={styles.typeRow}>
@@ -527,13 +537,28 @@ export function HomeScreen() {
               </View>
             )}
 
-            {/* 日期 & 備註 */}
-            <TextInput
-              style={styles.noteInput}
-              placeholder="日期 YYYY-MM-DD"
-              value={addDate}
-              onChangeText={setAddDate}
-            />
+            {/* 日期選擇器 */}
+            <Pressable style={styles.dateTrigger} onPress={() => setShowDatePicker(true)}>
+              <Feather name="calendar" size={16} color={colors.textSecondary} />
+              <Text style={styles.dateTriggerText}>
+                {`${selectedDate.getFullYear()} / ${String(selectedDate.getMonth()+1).padStart(2,'0')} / ${String(selectedDate.getDate()).padStart(2,'0')}`}
+              </Text>
+              <Feather name="chevron-down" size={14} color={colors.textMuted} />
+            </Pressable>
+
+            {showDatePicker && (
+              <DateTimePicker
+                value={selectedDate}
+                mode="date"
+                display="default"
+                onChange={(_event, date) => {
+                  setShowDatePicker(false);
+                  if (date) setSelectedDate(date);
+                }}
+              />
+            )}
+
+            {/* 備註 */}
             <TextInput
               style={styles.noteInput}
               placeholder="備註（選填）"
@@ -786,7 +811,6 @@ const styles = StyleSheet.create({
 
   // ── Modals ──
   overlay: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(14,20,40,0.52)' },
-  modalSlide: { position: 'absolute', bottom: 0, left: 0, right: 0 },
   modalBox: {
     backgroundColor:    'rgba(235,240,250,0.88)',
     borderTopLeftRadius:  radius.xxl,
@@ -862,6 +886,21 @@ const styles = StyleSheet.create({
 
   submitBtn:     { padding: 16, borderRadius: radius.lg, alignItems: 'center', marginTop: 8 },
   submitBtnText: { color: colors.textWhite, fontSize: fontSize.h3, fontWeight: '700', letterSpacing: 0.5 },
+
+  // ── 日期觸發按鈕 ──
+  dateTrigger: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: 'rgba(255,255,255,0.65)',
+    borderRadius: radius.lg, padding: 14, marginBottom: 12,
+    borderWidth: 1.5,
+    borderTopColor:    'rgba(255,255,255,0.9)',
+    borderLeftColor:   'rgba(255,255,255,0.7)',
+    borderBottomColor: 'rgba(200,210,225,0.5)',
+    borderRightColor:  'rgba(200,210,225,0.5)',
+  },
+  dateTriggerText: {
+    flex: 1, fontSize: fontSize.lg, fontWeight: '600', color: colors.textPrimary,
+  },
 
   btnRow:    { flexDirection: 'row', gap: 12 },
   cancelBtn: {

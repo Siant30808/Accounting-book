@@ -1,28 +1,42 @@
 import 'react-native-reanimated';
 import React, { useState, useEffect } from 'react';
-import { View, Text, Pressable, StyleSheet, Platform } from 'react-native';
+import { View, Text, Pressable, StyleSheet, ActivityIndicator } from 'react-native';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
-import { colors, fontSize, shadows } from './src/theme';
+import { colors, fontSize } from './src/theme';
 import { HomeScreen }     from './src/screens/HomeScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
 import { ReportScreen }   from './src/screens/ReportScreen';
 import { ShoppingScreen } from './src/screens/ShoppingScreen';
-import { useBudgetStore } from './src/store/useBudgetStore';
+import { useBudgetStore, hydrateStore } from './src/store/useBudgetStore';
 
 type Tab = 'home' | 'report' | 'shopping' | 'settings';
 
 const TABS: { key: Tab; icon: React.ComponentProps<typeof Feather>['name']; label: string }[] = [
-  { key: 'home',     icon: 'home',        label: '主頁' },
-  { key: 'report',   icon: 'bar-chart-2', label: '報表' },
+  { key: 'home',     icon: 'home',         label: '主頁' },
+  { key: 'report',   icon: 'bar-chart-2',  label: '報表' },
   { key: 'shopping', icon: 'shopping-bag', label: '採購' },
-  { key: 'settings', icon: 'settings',    label: '設定' },
+  { key: 'settings', icon: 'settings',     label: '設定' },
 ];
 
-export default function App() {
+function AppInner() {
   const [activeTab, setActiveTab] = useState<Tab>('home');
   const checkPeriodRollover = useBudgetStore(s => s.checkPeriodRollover);
+  const hydrated = useBudgetStore(s => s.hydrated);
+  const insets = useSafeAreaInsets();
 
-  useEffect(() => { checkPeriodRollover(); }, []);
+  useEffect(() => {
+    hydrateStore().then(() => { checkPeriodRollover(); });
+  }, []);
+
+  // 資料載入中，顯示過渡畫面
+  if (!hydrated) {
+    return (
+      <View style={styles.loadingScreen}>
+        <ActivityIndicator size="large" color={colors.savings} />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.root}>
@@ -33,7 +47,8 @@ export default function App() {
         {activeTab === 'settings' && <SettingsScreen />}
       </View>
 
-      <View style={styles.tabBar}>
+      {/* Tab bar 自動避開系統導航列 */}
+      <View style={[styles.tabBar, { paddingBottom: Math.max(insets.bottom, 6) }]}>
         {TABS.map(tab => {
           const active = activeTab === tab.key;
           return (
@@ -58,20 +73,27 @@ export default function App() {
   );
 }
 
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <AppInner />
+    </SafeAreaProvider>
+  );
+}
+
 const styles = StyleSheet.create({
   root:           { flex: 1, backgroundColor: colors.appBg },
+  loadingScreen:  { flex: 1, backgroundColor: colors.appBg, alignItems: 'center', justifyContent: 'center' },
   content:        { flex: 1 },
   tabBar: {
     flexDirection:   'row',
     backgroundColor: colors.tabBar,
     borderTopWidth:  1,
     borderTopColor:  'rgba(220,225,230,0.8)',
-    paddingBottom:   Platform.OS === 'ios' ? 20 : 4,
-    paddingTop:      6,
-    height:          Platform.OS === 'ios' ? 80 : 60,
+    paddingTop:      8,
     elevation:       10,
   },
-  tabItem:        { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 3 },
+  tabItem:        { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 3, paddingBottom: 4 },
   tabLabel:       { fontSize: fontSize.sm, fontWeight: '600', color: '#aaa' },
   tabLabelActive: { color: colors.textPrimary },
 });
