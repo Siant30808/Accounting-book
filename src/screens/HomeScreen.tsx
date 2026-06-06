@@ -465,7 +465,7 @@ export function HomeScreen() {
         }}
       >
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={{ flex: 1, justifyContent: 'flex-end' }}
         >
           <Pressable style={StyleSheet.absoluteFill} onPress={() => {
