@@ -232,8 +232,8 @@ export const useBudgetStore = create<BudgetState>((set, get) => ({
     const period = currentPeriod(settings.payday);
     if (!bill.paidPeriods.includes(period.startStr)) return;
 
-    const note = bill.autoDeduct ? `固定帳單（自動扣繳）：${bill.name}` : `固定帳單：${bill.name}`;
-    const tx = transactions.find(t => t.note === note && inPeriod(t.date, period));
+    const notes = [`固定帳單：${bill.name}`, `固定帳單（自動扣繳）：${bill.name}`];
+    const tx = transactions.find(t => notes.includes(t.note ?? '') && inPeriod(t.date, period));
     if (tx) get().deleteTransaction(tx.id);
 
     const updated = bills.map(b =>
