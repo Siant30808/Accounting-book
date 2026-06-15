@@ -8,6 +8,7 @@ import { useBudgetStore } from '../store/useBudgetStore';
 import { colors, radius, spacing, fontSize, shadows, glows, textShadows } from '../theme';
 import { GlassCard } from '../components/GlassCard';
 import { exportExcel, importExcel } from '../utils/excel';
+import { exportBackup, importBackup } from '../utils/backup';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 
@@ -61,6 +62,19 @@ export function SettingsScreen() {
     const { imported, transactions: merged } = await importExcel(result.assets[0].uri, transactions);
     useBudgetStore.getState().importTransactions(merged);
     showToast(`✅ 匯入完成，新增 ${imported} 筆`);
+  };
+
+  // ── 完整資料備份 / 還原（含設定、存款、桌布等所有資料）──
+  const handleBackup = async () => {
+    showToast('⏳ 產生備份中…');
+    const msg = await exportBackup();
+    showToast(msg);
+  };
+
+  const handleRestore = async () => {
+    showToast('⏳ 還原中…');
+    const msg = await importBackup();
+    showToast(msg);
   };
 
   // ── 背景圖 ──
@@ -287,7 +301,20 @@ export function SettingsScreen() {
         {/* 匯出 / 匯入 */}
         <GlassCard style={styles.section}>
           <Text style={styles.sectionTitle}>備份與還原</Text>
-          <Pressable style={[styles.actionBtn, styles.actionBtnMint]} onPress={handleExport}>
+          <Pressable style={[styles.actionBtn, styles.actionBtnPurple]} onPress={handleBackup}>
+            <View style={styles.btnInner}>
+              <Feather name="database" size={18} color={colors.savings} />
+              <Text style={[styles.actionBtnText, { color: colors.savings }]}>匯出完整備份</Text>
+            </View>
+          </Pressable>
+          <Pressable style={[styles.actionBtn, styles.actionBtnPurple, { marginTop: 10 }]} onPress={handleRestore}>
+            <View style={styles.btnInner}>
+              <Feather name="rotate-ccw" size={18} color={colors.savings} />
+              <Text style={[styles.actionBtnText, { color: colors.savings }]}>還原完整備份</Text>
+            </View>
+          </Pressable>
+
+          <Pressable style={[styles.actionBtn, styles.actionBtnMint, { marginTop: 10 }]} onPress={handleExport}>
             <View style={styles.btnInner}>
               <Feather name="upload-cloud" size={18} color={colors.income} />
               <Text style={[styles.actionBtnText, { color: colors.income }]}>匯出 Excel 報表</Text>
@@ -394,6 +421,7 @@ const styles = StyleSheet.create({
   actionBtnMint:  { backgroundColor: 'rgba(52,211,153,0.12)', borderColor: 'rgba(52,211,153,0.35)' },
   actionBtnCyan:  { backgroundColor: 'rgba(56,189,248,0.12)', borderColor: 'rgba(56,189,248,0.35)' },
   actionBtnGhost: { backgroundColor: 'rgba(244,114,182,0.10)', borderColor: 'rgba(244,114,182,0.35)' },
+  actionBtnPurple: { backgroundColor: 'rgba(167,139,250,0.12)', borderColor: 'rgba(167,139,250,0.35)' },
   actionBtnText:  { fontSize: fontSize.xl, fontWeight: '700', ...textShadows.light },
 
   confirmBox: {
