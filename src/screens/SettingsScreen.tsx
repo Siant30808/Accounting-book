@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TextInput,
-  Pressable, SafeAreaView, StatusBar, Image,
+  Pressable, SafeAreaView, StatusBar, Image, Modal, KeyboardAvoidingView,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useBudgetStore } from '../store/useBudgetStore';
@@ -9,11 +9,17 @@ import { colors, radius, spacing, fontSize, shadows, glows, textShadows } from '
 import { GlassCard } from '../components/GlassCard';
 import { exportExcel, importExcel } from '../utils/excel';
 import { exportBackup, importBackup } from '../utils/backup';
+import { Bill, CATS, getCatIcon } from '../types';
+import { fmt } from '../utils/format';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 
 export function SettingsScreen() {
-  const { settings, transactions, bgSettings, saveSettings, saveBgSettings, clearAll } = useBudgetStore();
+  const {
+    settings, transactions, bgSettings, bills,
+    saveSettings, saveBgSettings, clearAll,
+    addBill, updateBill, deleteBill,
+  } = useBudgetStore();
 
   const [name,    setName]    = useState(settings.username);
   const [payday,  setPayday]  = useState(String(settings.payday));
@@ -21,6 +27,15 @@ export function SettingsScreen() {
   const [savings, setSavings] = useState(String(settings.savings));
   const [toast,   setToast]   = useState('');
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+
+  // ── 固定帳單管理 ──
+  const [showBillModal,  setShowBillModal]  = useState(false);
+  const [editingBillId,  setEditingBillId]  = useState<number | null>(null);
+  const [billName,       setBillName]       = useState('');
+  const [billAmount,     setBillAmount]     = useState('');
+  const [billDueDay,     setBillDueDay]     = useState('1');
+  const [billCat,        setBillCat]        = useState<Bill['cat']>('其他');
+  const [billAutoDeduct, setBillAutoDeduct] = useState(false);
 
   useEffect(() => {
     setName(settings.username);
@@ -104,6 +119,45 @@ export function SettingsScreen() {
     clearAll();
     setShowClearConfirm(false);
     showToast('🗑️ 已清除所有記錄');
+  };
+
+  // ── 固定帳單管理 ──
+  const openAddBillModal = () => {
+    setEditingBillId(null);
+    setBillName(''); setBillAmount(''); setBillDueDay('1');
+    setBillCat('其他'); setBillAutoDeduct(false);
+    setShowBillModal(true);
+  };
+
+  const openEditBillModal = (bill: Bill) => {
+    setEditingBillId(bill.id);
+    setBillName(bill.name);
+    setBillAmount(String(bill.amount));
+    setBillDueDay(String(bill.dueDay));
+    setBillCat(bill.cat);
+    setBillAutoDeduct(bill.autoDeduct);
+    setShowBillModal(true);
+  };
+
+  const handleSaveBill = () => {
+    const amount = parseFloat(billAmount);
+    const dueDay = Math.min(28, Math.max(1, parseInt(billDueDay) || 1));
+    if (!billName.trim()) { showToast('❌ 請輸入帳單名稱'); return; }
+    if (!amount || amount <= 0) { showToast('❌ 請輸入有效金額'); return; }
+
+    if (editingBillId !== null) {
+      updateBill(editingBillId, { name: billName.trim(), amount, dueDay, cat: billCat, autoDeduct: billAutoDeduct });
+      showToast('✅ 帳單已更新');
+    } else {
+      addBill({ name: billName.trim(), amount, dueDay, cat: billCat, autoDeduct: billAutoDeduct });
+      showToast('✅ 已新增帳單');
+    }
+    setShowBillModal(false);
+  };
+
+  const handleDeleteBill = (id: number) => {
+    deleteBill(id);
+    showToast('🗑️ 已刪除帳單');
   };
 
   return (
@@ -206,6 +260,40 @@ export function SettingsScreen() {
               <Text style={styles.badgeText}>開啟</Text>
             </View>
           </View>
+        </GlassCard>
+
+        {/* 固定帳單管理 */}
+        <GlassCard style={styles.section}>
+          <Text style={styles.sectionTitle}>固定帳單管理</Text>
+
+          {bills.length === 0 ? (
+            <Text style={styles.bgEmptyText}>尚未新增固定帳單</Text>
+          ) : (
+            bills.map((bill, idx) => (
+              <View key={bill.id} style={[styles.row, idx > 0 && styles.rowBorder]}>
+                <Text style={[styles.rowIcon, { fontSize: 20 }]}>{getCatIcon(bill.cat)}</Text>
+                <View style={styles.rowInfo}>
+                  <Text style={styles.rowLabel}>{bill.name}</Text>
+                  <Text style={styles.rowSub}>
+                    每月 {bill.dueDay} 日 · {fmt(bill.amount)}{bill.autoDeduct ? ' · 自動扣繳' : ''}
+                  </Text>
+                </View>
+                <Pressable onPress={() => openEditBillModal(bill)} hitSlop={8} style={{ marginRight: spacing.md }}>
+                  <Feather name="edit-2" size={18} color="#64748B" />
+                </Pressable>
+                <Pressable onPress={() => handleDeleteBill(bill.id)} hitSlop={8}>
+                  <Feather name="trash-2" size={18} color={colors.expense} />
+                </Pressable>
+              </View>
+            ))
+          )}
+
+          <Pressable style={[styles.actionBtn, styles.actionBtnPurple, { marginTop: spacing.lg }]} onPress={openAddBillModal}>
+            <View style={styles.btnInner}>
+              <Feather name="plus-circle" size={18} color={colors.savings} />
+              <Text style={[styles.actionBtnText, { color: colors.savings }]}>新增固定帳單</Text>
+            </View>
+          </Pressable>
         </GlassCard>
 
         {/* 背景主題 */}
@@ -362,6 +450,89 @@ export function SettingsScreen() {
           <Text style={styles.toastText}>{toast}</Text>
         </View>
       )}
+
+      {/* ════════════════════════════════════
+          新增 / 編輯固定帳單 Modal
+      ════════════════════════════════════ */}
+      <Modal
+        visible={showBillModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowBillModal(false)}
+      >
+        <KeyboardAvoidingView behavior="padding" style={{ flex: 1, justifyContent: 'flex-end' }}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowBillModal(false)} />
+          <View style={styles.billModalBox}>
+            <View style={styles.dragHandle} />
+            <View style={styles.modalTitleRow}>
+              <Feather name="file-text" size={18} color={colors.savings} />
+              <Text style={styles.modalTitle}>{editingBillId !== null ? '編輯帳單' : '新增帳單'}</Text>
+            </View>
+
+            <TextInput
+              style={styles.billInput}
+              placeholder="帳單名稱（例如：房租）"
+              placeholderTextColor="#94A3B8"
+              value={billName}
+              onChangeText={setBillName}
+            />
+            <View style={styles.billRow2}>
+              <TextInput
+                style={[styles.billInput, { flex: 1 }]}
+                placeholder="金額 NT$"
+                placeholderTextColor="#94A3B8"
+                keyboardType="numeric"
+                value={billAmount}
+                onChangeText={setBillAmount}
+              />
+              <TextInput
+                style={[styles.billInput, { width: 100 }]}
+                placeholder="每月幾號"
+                placeholderTextColor="#94A3B8"
+                keyboardType="numeric"
+                maxLength={2}
+                value={billDueDay}
+                onChangeText={setBillDueDay}
+              />
+            </View>
+
+            {/* 類別選擇 */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: spacing.lg }}>
+              {CATS.expense.map(c => (
+                <Pressable
+                  key={c.n}
+                  style={[styles.catChip, billCat === c.n && styles.catChipActive]}
+                  onPress={() => setBillCat(c.n)}
+                >
+                  <Text style={styles.catChipText}>{c.e} {c.n}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+
+            {/* 自動扣繳切換 */}
+            <View style={styles.textModeRow}>
+              {([false, true] as const).map(v => {
+                const active = billAutoDeduct === v;
+                return (
+                  <Pressable
+                    key={String(v)}
+                    style={[styles.textModeBtn, active && styles.textModeBtnActive]}
+                    onPress={() => setBillAutoDeduct(v)}
+                  >
+                    <Text style={[styles.textModeBtnText, active && styles.textModeBtnTextActive]}>
+                      {v ? '自動扣繳' : '手動繳費'}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <Pressable style={[styles.submitBtn, { backgroundColor: colors.savings }]} onPress={handleSaveBill}>
+              <Text style={styles.submitBtnText}>{editingBillId !== null ? '儲存變更' : '新增帳單'}</Text>
+            </Pressable>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -492,4 +663,36 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xxl, paddingVertical: spacing.md, borderRadius: radius.pill,
   },
   toastText: { color: colors.textWhite, fontSize: fontSize.lg },
+
+  // ── 固定帳單 Modal ──
+  billModalBox: {
+    backgroundColor:      'rgba(255,255,255,0.96)',
+    borderTopLeftRadius:  radius.xxl,
+    borderTopRightRadius: radius.xxl,
+    padding: 22,
+    paddingBottom: 40,
+    borderWidth:   1,
+    borderColor:   'rgba(255,255,255,0.80)',
+  },
+  dragHandle:    { width: 40, height: 4, backgroundColor: '#E2E8F0', borderRadius: 2, alignSelf: 'center', marginBottom: 16 },
+  modalTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 },
+  modalTitle:    { fontSize: fontSize.h2, fontWeight: '700', color: colors.textPrimary },
+  billInput: {
+    borderRadius: radius.lg, padding: spacing.lg, fontSize: fontSize.lg,
+    marginBottom: spacing.lg, backgroundColor: '#F8FAFC',
+    borderWidth: 1, borderColor: 'rgba(0,0,0,0.06)', color: colors.textPrimary,
+  },
+  billRow2: { flexDirection: 'row', gap: spacing.md },
+  catChip: {
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: radius.pill, marginRight: 8,
+    backgroundColor: 'rgba(0,0,0,0.04)',
+    borderWidth: 1.5, borderColor: 'rgba(0,0,0,0.07)',
+  },
+  catChipActive: {
+    backgroundColor: 'rgba(167,139,250,0.18)',
+    borderWidth: 1.5, borderColor: colors.savings,
+  },
+  catChipText: { fontSize: fontSize.md, fontWeight: '600', color: colors.textPrimary },
+  submitBtn:     { padding: 16, borderRadius: radius.lg, alignItems: 'center', marginTop: 8 },
+  submitBtnText: { color: colors.textWhite, fontSize: fontSize.h3, fontWeight: '700', letterSpacing: 0.5 },
 });

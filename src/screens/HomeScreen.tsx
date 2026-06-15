@@ -16,7 +16,8 @@ import { PigSavings }           from '../components/PigSavings';
 import { fmt, dayLabel }        from '../utils/format';
 import { localDateStr, getPeriod } from '../utils/period';
 import { exportExcel, importExcel } from '../utils/excel';
-import { Transaction, CATS, getCatIcon } from '../types';
+import { BillReminderModal } from '../components/BillReminderModal';
+import { Transaction, Bill, CATS, getCatIcon } from '../types';
 import { colors, radius, spacing, fontSize, shadows, glows, textShadows } from '../theme';
 import { GlassCard } from '../components/GlassCard';
 
@@ -134,6 +135,7 @@ export function HomeScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [savingsInput, setSavingsInput] = useState('');
   const [toast,    setToast]    = useState('');
+  const [reminderBills, setReminderBills] = useState<Bill[] | null>(null);
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showToast  = useCallback((msg: string) => {
@@ -145,6 +147,8 @@ export function HomeScreen() {
   useEffect(() => {
     const msg = checkPeriodRollover();
     if (msg) showToast(msg);
+    const unpaid = useBudgetStore.getState().checkBillReminders();
+    if (unpaid) setReminderBills(unpaid);
   }, []);
 
   const openAddModal = useCallback((type: 'expense' | 'income' = 'expense') => {
@@ -717,6 +721,24 @@ export function HomeScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* ════════════════════════════════════
+          固定帳單提醒 Modal
+      ════════════════════════════════════ */}
+      <BillReminderModal
+        visible={!!reminderBills && reminderBills.length > 0}
+        bills={reminderBills ?? []}
+        period={period}
+        onMarkPaid={(id) => {
+          useBudgetStore.getState().markBillPaid(id);
+          setReminderBills(prev => (prev ? prev.filter(b => b.id !== id) : prev));
+          showToast('✅ 已記錄繳費');
+        }}
+        onClose={(dismissToday) => {
+          if (dismissToday) useBudgetStore.getState().setBillDismissDate(localDateStr(new Date()));
+          setReminderBills(null);
+        }}
+      />
     </SafeAreaView>
   );
 }

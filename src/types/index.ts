@@ -61,12 +61,25 @@ export interface PieSlice {
   color:  string;
 }
 
+// ── 固定帳單（持久化）──
+export interface Bill {
+  id:          number;
+  name:        string;
+  amount:      number;
+  dueDay:      number;     // 每月到期日（1~28）
+  cat:         Category;
+  autoDeduct:  boolean;     // 是否為自動扣繳
+  paidPeriods: string[];    // 已繳清的週期（period.startStr 列表）
+}
+
 // ── MMKV 儲存鍵名 ──
 export const STORAGE_KEYS = {
   TRANSACTIONS: 'acct_txdata_v1',
   SETTINGS:     'acct_settings_v1',
   FAB_POS:      'fab_pos',
   BG_SETTINGS:  'acct_bg_settings_v1',
+  BILLS:        'acct_bills_v1',
+  BILL_DISMISS: 'acct_bill_dismiss_v1',
 } as const;
 
 // ── 預設設定值 ──

@@ -60,6 +60,13 @@ export function inPeriod(txDate: string, p: Period): boolean {
   return txDate >= p.startStr && txDate <= p.endStr;
 }
 
+/** 取得某個到期日（每月幾號）落在指定週期內的實際日期 */
+export function getDueDateInPeriod(dueDay: number, p: Period): Date {
+  const d1 = new Date(p.start.getFullYear(), p.start.getMonth(), dueDay);
+  if (d1 >= p.start && d1 <= p.end) return d1;
+  return new Date(p.start.getFullYear(), p.start.getMonth() + 1, dueDay);
+}
+
 export function getAllPeriods(txDates: string[], payday: number): Period[] {
   const keys = new Set<string>();
   txDates.forEach(date => {
