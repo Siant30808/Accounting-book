@@ -71,3 +71,17 @@ git push
 - `app.json` → `"newArchEnabled": true`
 - 資料儲存使用 `AsyncStorage`（穩定，任何環境都能用）
 - `android/` 資料夾不推上 GitHub（已在 .gitignore）
+
+---
+
+## android/ 不存在時（第一次 or 重新 clone 後）
+`android/` 資料夾每次都要重新產生，且體積優化設定（ABI 限制 / R8 / ProGuard）不會保留在 git 裡。
+請用以下指令一次完成「產生 + 補上優化設定」：
+```bash
+npm run prebuild
+```
+等同於：
+```bash
+npx expo prebuild --platform android
+node scripts/patch-android.js
+```
