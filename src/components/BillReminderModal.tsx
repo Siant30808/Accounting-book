@@ -11,21 +11,16 @@ interface Props {
   bills:    Bill[];
   period:   Period;
   onMarkPaid: (id: number) => void;
-  onClose:    (dismissToday: boolean) => void;
+  onClose:    () => void;
 }
 
 export function BillReminderModal({ visible, bills, period, onMarkPaid, onClose }: Props) {
-  const [dismissToday, setDismissToday] = React.useState(false);
   const todayStr = localDateStr(new Date());
 
-  React.useEffect(() => {
-    if (visible) setDismissToday(false);
-  }, [visible]);
-
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={() => onClose(dismissToday)}>
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={() => onClose(dismissToday)} />
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
         <View style={styles.modalBox}>
           <View style={styles.dragHandle} />
           <View style={styles.titleRow}>
@@ -70,14 +65,7 @@ export function BillReminderModal({ visible, bills, period, onMarkPaid, onClose 
             })}
           </ScrollView>
 
-          <Pressable style={styles.dismissRow} onPress={() => setDismissToday(v => !v)}>
-            <View style={[styles.checkbox, dismissToday && styles.checkboxActive]}>
-              {dismissToday && <Feather name="check" size={14} color="#fff" />}
-            </View>
-            <Text style={styles.dismissText}>今日不再提醒</Text>
-          </Pressable>
-
-          <Pressable style={styles.closeBtn} onPress={() => onClose(dismissToday)}>
+          <Pressable style={[styles.closeBtn, { marginTop: spacing.lg }]} onPress={onClose}>
             <Text style={styles.closeBtnText}>關閉</Text>
           </Pressable>
         </View>
@@ -127,14 +115,6 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.xs,
   },
   payBtnText: { fontSize: fontSize.base, fontWeight: '700', color: colors.income },
-
-  dismissRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.lg, marginBottom: spacing.md },
-  checkbox: {
-    width: 20, height: 20, borderRadius: radius.xs, borderWidth: 1.5, borderColor: 'rgba(0,0,0,0.2)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  checkboxActive: { backgroundColor: colors.savings, borderColor: colors.savings },
-  dismissText: { fontSize: fontSize.lg, color: colors.textSecondary },
 
   closeBtn: {
     padding: spacing.lg, borderRadius: radius.md, alignItems: 'center',
