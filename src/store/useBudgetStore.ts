@@ -176,7 +176,13 @@ export const useBudgetStore = create<BudgetState>((set, get) => ({
 
   // ── 固定帳單操作 ──
   addBill: (b) => {
-    const updated = [...get().bills, { ...b, id: Date.now(), paidPeriods: [] }];
+    // 若新增時本期到期日已過，視為跳過本期，從下一期開始提醒
+    const period   = currentPeriod(get().settings.payday);
+    const due      = getDueDateInPeriod(b.dueDay, period);
+    const todayStr = localDateStr(new Date());
+    const paidPeriods = todayStr > localDateStr(due) ? [period.startStr] : [];
+
+    const updated = [...get().bills, { ...b, id: Date.now(), paidPeriods }];
     set({ bills: updated });
     writeJSON(STORAGE_KEYS.BILLS, updated);
   },
