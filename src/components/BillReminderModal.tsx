@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, Modal, Pressable, StyleSheet, ScrollView } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { Bill, Period, getCatIcon } from '../types';
@@ -11,16 +11,19 @@ interface Props {
   bills:    Bill[];
   period:   Period;
   onMarkPaid: (id: number) => void;
-  onClose:    () => void;
+  onClose:    (dismissToday: boolean) => void;
 }
 
 export function BillReminderModal({ visible, bills, period, onMarkPaid, onClose }: Props) {
   const todayStr = localDateStr(new Date());
+  const [dismissToday, setDismissToday] = useState(false);
+
+  const handleClose = () => onClose(dismissToday);
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={handleClose}>
       <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <Pressable style={StyleSheet.absoluteFill} onPress={handleClose} />
         <View style={styles.modalBox}>
           <View style={styles.dragHandle} />
           <View style={styles.titleRow}>
@@ -65,7 +68,14 @@ export function BillReminderModal({ visible, bills, period, onMarkPaid, onClose 
             })}
           </ScrollView>
 
-          <Pressable style={[styles.closeBtn, { marginTop: spacing.lg }]} onPress={onClose}>
+          <Pressable style={styles.dismissRow} onPress={() => setDismissToday(!dismissToday)} hitSlop={8}>
+            <View style={[styles.checkbox, dismissToday && styles.checkboxActive]}>
+              {dismissToday && <Feather name="check" size={14} color="#fff" />}
+            </View>
+            <Text style={styles.dismissText}>今日不再提醒</Text>
+          </Pressable>
+
+          <Pressable style={[styles.closeBtn, { marginTop: spacing.md }]} onPress={handleClose}>
             <Text style={styles.closeBtnText}>關閉</Text>
           </Pressable>
         </View>
@@ -115,6 +125,21 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.xs,
   },
   payBtnText: { fontSize: fontSize.base, fontWeight: '700', color: colors.income },
+
+  dismissRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginTop: spacing.lg, alignSelf: 'flex-start',
+  },
+  checkbox: {
+    width: 20, height: 20, borderRadius: radius.xs,
+    borderWidth: 1.5, borderColor: '#CBD5E1',
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#fff',
+  },
+  checkboxActive: {
+    backgroundColor: colors.savings, borderColor: colors.savings,
+  },
+  dismissText: { fontSize: fontSize.base, color: colors.textPrimary },
 
   closeBtn: {
     padding: spacing.lg, borderRadius: radius.md, alignItems: 'center',

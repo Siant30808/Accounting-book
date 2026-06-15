@@ -734,8 +734,10 @@ export function HomeScreen() {
           setReminderBills(prev => (prev ? prev.filter(b => b.id !== id) : prev));
           showToast('✅ 已記錄繳費');
         }}
-        onClose={() => {
-          useBudgetStore.getState().setBillDismissDate(localDateStr(new Date()));
+        onClose={(dismissToday) => {
+          if (dismissToday) {
+            useBudgetStore.getState().setBillDismissDate(localDateStr(new Date()));
+          }
           setReminderBills(null);
         }}
       />
