@@ -285,7 +285,8 @@ export const useBudgetStore = create<BudgetState>((set, get) => ({
 
     if (billDismissDate === todayStr) return null;
 
-    const unpaid = nextBills.filter(b => !b.paidPeriods.includes(period.startStr));
+    // 自動扣繳且尚未到期的帳單不需提醒（到期當天會自動入帳）
+    const unpaid = nextBills.filter(b => !b.paidPeriods.includes(period.startStr) && !b.autoDeduct);
     return unpaid.length ? unpaid : null;
   },
 }));
