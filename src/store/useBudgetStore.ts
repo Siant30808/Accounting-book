@@ -52,6 +52,7 @@ interface BudgetState {
   updateBill: (id: number, partial: Partial<Omit<Bill, 'id' | 'paidPeriods'>>) => void;
   deleteBill: (id: number) => void;
   markBillPaid:       (id: number) => void;
+  unmarkBillPaid:     (id: number) => void;
   setBillDismissDate: (date: string) => void;
   checkBillReminders: () => Bill[] | null;
 }
@@ -219,6 +220,24 @@ export const useBudgetStore = create<BudgetState>((set, get) => ({
 
     const updated = get().bills.map(b =>
       b.id === id ? { ...b, paidPeriods: [...b.paidPeriods, period.startStr] } : b,
+    );
+    set({ bills: updated });
+    writeJSON(STORAGE_KEYS.BILLS, updated);
+  },
+
+  unmarkBillPaid: (id) => {
+    const { bills, settings, transactions } = get();
+    const bill = bills.find(b => b.id === id);
+    if (!bill) return;
+    const period = currentPeriod(settings.payday);
+    if (!bill.paidPeriods.includes(period.startStr)) return;
+
+    const note = bill.autoDeduct ? `固定帳單（自動扣繳）：${bill.name}` : `固定帳單：${bill.name}`;
+    const tx = transactions.find(t => t.note === note && inPeriod(t.date, period));
+    if (tx) get().deleteTransaction(tx.id);
+
+    const updated = bills.map(b =>
+      b.id === id ? { ...b, paidPeriods: b.paidPeriods.filter(p => p !== period.startStr) } : b,
     );
     set({ bills: updated });
     writeJSON(STORAGE_KEYS.BILLS, updated);

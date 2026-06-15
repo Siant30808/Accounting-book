@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TextInput,
-  Pressable, SafeAreaView, StatusBar, Image, Modal, KeyboardAvoidingView,
+  Pressable, SafeAreaView, StatusBar, Image, Modal, KeyboardAvoidingView, Switch,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useBudgetStore } from '../store/useBudgetStore';
@@ -18,7 +18,7 @@ export function SettingsScreen() {
   const {
     settings, transactions, bgSettings, bills,
     saveSettings, saveBgSettings, clearAll,
-    addBill, updateBill, deleteBill,
+    addBill, updateBill, deleteBill, markBillPaid, unmarkBillPaid, getCurrentPeriod,
   } = useBudgetStore();
 
   const [name,    setName]    = useState(settings.username);
@@ -269,23 +269,33 @@ export function SettingsScreen() {
           {bills.length === 0 ? (
             <Text style={styles.bgEmptyText}>尚未新增固定帳單</Text>
           ) : (
-            bills.map((bill, idx) => (
-              <View key={bill.id} style={[styles.row, idx > 0 && styles.rowBorder]}>
-                <Text style={[styles.rowIcon, { fontSize: 20 }]}>{getCatIcon(bill.cat)}</Text>
-                <View style={styles.rowInfo}>
-                  <Text style={styles.rowLabel}>{bill.name}</Text>
-                  <Text style={styles.rowSub}>
-                    每月 {bill.dueDay} 日 · {fmt(bill.amount)}{bill.autoDeduct ? ' · 自動扣繳' : ''}
-                  </Text>
+            bills.map((bill, idx) => {
+              const paid = bill.paidPeriods.includes(getCurrentPeriod().startStr);
+              return (
+                <View key={bill.id} style={[styles.row, idx > 0 && styles.rowBorder]}>
+                  <Text style={[styles.rowIcon, { fontSize: 20 }]}>{getCatIcon(bill.cat)}</Text>
+                  <View style={styles.rowInfo}>
+                    <Text style={styles.rowLabel}>{bill.name}</Text>
+                    <Text style={styles.rowSub}>
+                      每月 {bill.dueDay} 日 · {fmt(bill.amount)}{bill.autoDeduct ? ' · 自動扣繳' : ''}
+                    </Text>
+                  </View>
+                  <Switch
+                    value={paid}
+                    onValueChange={(v) => (v ? markBillPaid(bill.id) : unmarkBillPaid(bill.id))}
+                    trackColor={{ false: '#E2E8F0', true: 'rgba(52,211,153,0.5)' }}
+                    thumbColor={paid ? colors.income : '#F1F5F9'}
+                    style={{ marginRight: spacing.md }}
+                  />
+                  <Pressable onPress={() => openEditBillModal(bill)} hitSlop={8} style={{ marginRight: spacing.md }}>
+                    <Feather name="edit-2" size={18} color="#64748B" />
+                  </Pressable>
+                  <Pressable onPress={() => handleDeleteBill(bill.id)} hitSlop={8}>
+                    <Feather name="trash-2" size={18} color={colors.expense} />
+                  </Pressable>
                 </View>
-                <Pressable onPress={() => openEditBillModal(bill)} hitSlop={8} style={{ marginRight: spacing.md }}>
-                  <Feather name="edit-2" size={18} color="#64748B" />
-                </Pressable>
-                <Pressable onPress={() => handleDeleteBill(bill.id)} hitSlop={8}>
-                  <Feather name="trash-2" size={18} color={colors.expense} />
-                </Pressable>
-              </View>
-            ))
+              );
+            })
           )}
 
           <Pressable style={[styles.actionBtn, styles.actionBtnPurple, { marginTop: spacing.lg }]} onPress={openAddBillModal}>
