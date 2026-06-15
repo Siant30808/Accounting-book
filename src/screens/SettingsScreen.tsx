@@ -36,6 +36,7 @@ export function SettingsScreen() {
   const [billDueDay,     setBillDueDay]     = useState('1');
   const [billCat,        setBillCat]        = useState<Bill['cat']>('其他');
   const [billAutoDeduct, setBillAutoDeduct] = useState(false);
+  const [confirmUnmarkBillId, setConfirmUnmarkBillId] = useState<number | null>(null);
 
   useEffect(() => {
     setName(settings.username);
@@ -273,16 +274,16 @@ export function SettingsScreen() {
               const paid = bill.paidPeriods.includes(getCurrentPeriod().startStr);
               return (
                 <View key={bill.id} style={[styles.row, idx > 0 && styles.rowBorder]}>
-                  <Text style={[styles.rowIcon, { fontSize: 20 }]}>{getCatIcon(bill.cat)}</Text>
+                  <Text style={[styles.rowIcon, { fontSize: 20 }, paid && styles.billPaidDim]}>{getCatIcon(bill.cat)}</Text>
                   <View style={styles.rowInfo}>
-                    <Text style={styles.rowLabel}>{bill.name}</Text>
-                    <Text style={styles.rowSub}>
+                    <Text style={[styles.rowLabel, paid && styles.billPaidDim]}>{bill.name}</Text>
+                    <Text style={[styles.rowSub, paid && styles.billPaidDim]}>
                       每月 {bill.dueDay} 日 · {fmt(bill.amount)}{bill.autoDeduct ? ' · 自動扣繳' : ''}
                     </Text>
                   </View>
                   <Switch
                     value={paid}
-                    onValueChange={(v) => (v ? markBillPaid(bill.id) : unmarkBillPaid(bill.id))}
+                    onValueChange={(v) => (v ? markBillPaid(bill.id) : setConfirmUnmarkBillId(bill.id))}
                     trackColor={{ false: '#E2E8F0', true: 'rgba(52,211,153,0.5)' }}
                     thumbColor={paid ? colors.income : '#F1F5F9'}
                     style={{ marginRight: spacing.md }}
@@ -543,6 +544,37 @@ export function SettingsScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* ════════════════════════════════════
+          取消已繳費確認 Modal
+      ════════════════════════════════════ */}
+      <Modal
+        visible={confirmUnmarkBillId !== null}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setConfirmUnmarkBillId(null)}
+      >
+        <View style={styles.centerOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setConfirmUnmarkBillId(null)} />
+          <View style={styles.unmarkConfirmBox}>
+            <Text style={styles.unmarkConfirmText}>確定要將此帳單改回「未繳費」嗎？本期相關的交易記錄將會被刪除。</Text>
+            <View style={styles.confirmBtns}>
+              <Pressable style={styles.cancelBtn} onPress={() => setConfirmUnmarkBillId(null)}>
+                <Text style={styles.cancelBtnText}>取消</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.confirmBtn, { backgroundColor: '#B71C1C' }]}
+                onPress={() => {
+                  if (confirmUnmarkBillId !== null) unmarkBillPaid(confirmUnmarkBillId);
+                  setConfirmUnmarkBillId(null);
+                }}
+              >
+                <Text style={styles.confirmBtnText}>確認</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -573,6 +605,7 @@ const styles = StyleSheet.create({
   rowInfo:    { flex: 1 },
   rowLabel:   { fontSize: fontSize.lg, fontWeight: '600', color: colors.textPrimary },
   rowSub:     { fontSize: fontSize.base, color: colors.textMuted, marginTop: 2 },
+  billPaidDim: { opacity: 0.4 },
 
   input: {
     borderBottomWidth: 2, borderBottomColor: 'rgba(0,0,0,0.09)',
@@ -605,10 +638,20 @@ const styles = StyleSheet.create({
   actionBtnPurple: { backgroundColor: 'rgba(167,139,250,0.12)', borderColor: 'rgba(167,139,250,0.35)' },
   actionBtnText:  { fontSize: fontSize.xl, fontWeight: '700', ...textShadows.light },
 
+  centerOverlay: {
+    flex: 1, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.35)', paddingHorizontal: spacing.xxl,
+  },
   confirmBox: {
     backgroundColor: 'rgba(251,113,133,0.1)', borderRadius: radius.sm,
     padding: spacing.lg, borderWidth: 1, borderColor: 'rgba(251,113,133,0.3)',
   },
+  unmarkConfirmBox: {
+    backgroundColor: 'rgba(255,255,255,0.97)', borderRadius: radius.lg,
+    padding: spacing.lg, borderWidth: 1, borderColor: 'rgba(0,0,0,0.06)',
+    width: '100%',
+  },
+  unmarkConfirmText: { fontSize: fontSize.lg, color: colors.textPrimary, marginBottom: spacing.md, lineHeight: 20 },
   confirmText: { fontSize: fontSize.lg, color: colors.expense, marginBottom: spacing.md, lineHeight: 20 },
   confirmBtns: { flexDirection: 'row', gap: spacing.md },
   cancelBtn:   { flex: 1, padding: spacing.md, borderRadius: radius.sm, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(0,0,0,0.1)', backgroundColor: 'rgba(255,255,255,0.6)' },
