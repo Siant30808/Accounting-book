@@ -46,7 +46,7 @@ interface BudgetState {
   checkPeriodRollover: () => string | null;
 }
 
-const DEFAULT_BG: BgSettings = { opacity: 100, fileUri: null };
+const DEFAULT_BG: BgSettings = { opacity: 100, fileUri: null, textMode: 'dark' };
 
 export const useBudgetStore = create<BudgetState>((set, get) => ({
   transactions: [],
@@ -175,7 +175,8 @@ export async function hydrateStore(): Promise<void> {
 
     const txs        = txRaw[1]  ? JSON.parse(txRaw[1])  as Transaction[]        : [];
     const rawSetting = setRaw[1] ? JSON.parse(setRaw[1]) as Partial<AppSettings> : {};
-    const bgSettings = bgRaw[1]  ? JSON.parse(bgRaw[1])  as BgSettings           : DEFAULT_BG;
+    const bgRawParsed = bgRaw[1] ? JSON.parse(bgRaw[1]) as Partial<BgSettings> : {};
+    const bgSettings: BgSettings = { ...DEFAULT_BG, ...bgRawParsed };
     const fabPosition = fabRaw[1] ? JSON.parse(fabRaw[1]) as FabPosition         : null;
 
     const settings: AppSettings = { ...DEFAULT_SETTINGS, ...rawSetting };

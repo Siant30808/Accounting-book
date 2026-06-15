@@ -4,7 +4,7 @@
  */
 import React from 'react';
 import { View, ViewStyle } from 'react-native';
-import { Canvas, RoundedRect, LinearGradient, vec } from '@shopify/react-native-skia';
+import { Canvas, RoundedRect, LinearGradient, vec, BackdropFilter, Blur } from '@shopify/react-native-skia';
 import { radius as R } from '../theme';
 
 interface GlassCardProps {
@@ -46,6 +46,12 @@ export function GlassCard({
           style={{ position: 'absolute', top: 0, left: 0, width: w, height: h }}
           pointerEvents="none"
         >
+          {/* 核心魔法：真實毛玻璃背景模糊 */}
+          <BackdropFilter
+            clip={{ x: 0, y: 0, width: w, height: h, rx: borderRadius, ry: borderRadius }}
+            filter={<Blur blur={14} />}
+          />
+
           {/* 主體漸層：左上亮白 → 右下帶藍調 */}
           <RoundedRect x={0} y={0} width={w} height={h} r={borderRadius}>
             <LinearGradient

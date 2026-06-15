@@ -1,16 +1,20 @@
 /**
- * SkiaPieChart.tsx ── Cyberpunk HUD + Per-Segment Localized SweepGradient
- * 每個分段都有獨立的局部漸層，顏色在切片邊界完美銜接
+ * SkiaPieChart.tsx ── 旗艦級環形圖 (Frosted Jelly Donut)
+ *
+ * 分層渲染：
+ *   Layer 0  玻璃溝槽底座（三層：深色陰影 + 白霧 + 內陰影）
+ *   Layer 1  彩色果凍條（光暈 bloom + 本體 + 高光 gloss）
+ *   Layer 2  中心文字（Canvas 外，白色雙層投影）
+ *
+ * 生長動畫：Skia Group transform scale 0→1，純 UI thread，無 JS re-render
  */
-import React, { useMemo, useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { StyleSheet, View, Text } from 'react-native';
 import {
-  Canvas, Circle, Path, Skia, BlurMask, Group,
-  vec, SweepGradient, DashPathEffect, Path1DPathEffect,
+  Canvas, Path, Circle, BlurMask, Group, Skia, vec,
 } from '@shopify/react-native-skia';
-import Animated, {
-  useSharedValue, withRepeat, withTiming,
-  useDerivedValue, Easing,
+import {
+  useSharedValue, withSpring, useDerivedValue,
 } from 'react-native-reanimated';
 
 export interface ChartSlice {
@@ -20,282 +24,191 @@ export interface ChartSlice {
 }
 
 interface SkiaPieChartProps {
-  slices:       ChartSlice[];
-  size?:        number;
-  centerLabel?: string;
+  slices: ChartSlice[];
+  size?:  number;
 }
 
 function fmtCenter(n: number): string {
+  if (n === 0) return '0';
   if (n >= 10000) return (n / 10000).toFixed(1) + '萬';
   return Math.round(n).toLocaleString('zh-TW');
 }
 
-/** 將 hex / rgba 字串解析為 [r,g,b,a] (0~1) */
-function parseColor(c: string): [number, number, number, number] {
-  // rgba(r,g,b,a)
-  const rgba = c.match(/rgba?\(\s*(\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\s*\)/);
-  if (rgba) return [+rgba[1]/255, +rgba[2]/255, +rgba[3]/255, rgba[4] !== undefined ? +rgba[4] : 1];
-  // #rrggbb / #rgb
-  const hex = c.replace('#', '');
-  if (hex.length === 3) {
-    const [r,g,b] = hex.split('').map(x => parseInt(x+x, 16)/255);
-    return [r, g, b, 1];
-  }
-  const r = parseInt(hex.slice(0,2),16)/255;
-  const g = parseInt(hex.slice(2,4),16)/255;
-  const b = parseInt(hex.slice(4,6),16)/255;
-  return [r, g, b, 1];
+/** 把角度（度數）轉成弧弦坐標 */
+function polar(cx: number, cy: number, r: number, deg: number) {
+  const rad = (deg - 90) * (Math.PI / 180);
+  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
 }
 
-/** 在兩個顏色之間線性插值，回傳 rgba 字串 */
-function lerpColor(a: string, b: string, t: number): string {
-  const [ar,ag,ab,aa] = parseColor(a);
-  const [br,bg,bb,ba] = parseColor(b);
-  const r = Math.round((ar + (br-ar)*t) * 255);
-  const g = Math.round((ag + (bg-ag)*t) * 255);
-  const b2 = Math.round((ab + (bb-ab)*t) * 255);
-  const a2 = aa + (ba-aa)*t;
-  return `rgba(${r},${g},${b2},${a2.toFixed(3)})`;
+/** 建立單段弧線的 SVG path d 字串（只 stroke） */
+function arcPath(cx: number, cy: number, r: number, startDeg: number, sweepDeg: number): string {
+  const clamped = Math.min(sweepDeg, 359.9);
+  const endDeg  = startDeg + clamped;
+  const s = polar(cx, cy, r, startDeg);
+  const e = polar(cx, cy, r, endDeg);
+  return `M ${s.x} ${s.y} A ${r} ${r} 0 ${clamped > 180 ? 1 : 0} 1 ${e.x} ${e.y}`;
 }
 
-export function SkiaPieChart({ slices, size = 120, centerLabel }: SkiaPieChartProps) {
-  const PAD    = 26;
-  const CANVAS = size + PAD * 2;
-  const cx     = CANVAS / 2;
-  const cy     = CANVAS / 2;
+interface SlicePath { d: string; color: string }
 
-  const rShield = size * 0.47;
-  const rTick   = size * 0.42;
-  const rBlock  = size * 0.34;
-  const blockW  = size * 0.13;
-  const rInner  = size * 0.22;
+function buildPaths(
+  slices: ChartSlice[], total: number,
+  cx: number, cy: number, r: number,
+  gapDeg: number,
+): SlicePath[] {
+  if (total === 0 || slices.length === 0) return [];
+  const actualGap = slices.length > 1 ? gapDeg : 0;
+  const available = 360 - actualGap * slices.length;
+  let cursor = 0;
+  return slices.map(sl => {
+    const sweep = (sl.amount / total) * available;
+    const d = arcPath(cx, cy, r, cursor, sweep);
+    cursor += sweep + actualGap;
+    return { d, color: sl.color };
+  });
+}
 
-  const total    = slices.reduce((s, sl) => s + sl.amount, 0);
-  const labelTxt = centerLabel ?? (total > 0 ? fmtCenter(total) : '');
+export function SkiaPieChart({ slices, size = 160 }: SkiaPieChartProps) {
+  const cx      = size / 2;
+  const cy      = size / 2;
+  const r       = size * 0.38;
+  const strokeW = size * 0.12;
+  const GAP     = 8;
 
-  // ── 動畫 ──
-  const breathe   = useSharedValue(0);
-  const scanClock = useSharedValue(0);
+  const total = useMemo(() => slices.reduce((s, sl) => s + sl.amount, 0), [slices]);
+  const paths = useMemo(
+    () => buildPaths(slices, total, cx, cy, r, GAP),
+    [slices, total, size],
+  );
+
+  // ── 圓形剪裁遮罩（memoized，避免每 frame 重建 Skia 物件）──
+  const clipPath = useMemo(() => {
+    const p = Skia.Path.Make();
+    p.addCircle(cx, cy, r + strokeW / 2);
+    return p;
+  }, [cx, cy, r, strokeW]);
+
+  // ── 生長動畫：scale 0.01 → 1（純 UI thread）──
+  const growScale = useSharedValue(0.01);
 
   useEffect(() => {
-    breathe.value = withRepeat(
-      withTiming(1, { duration: 1800, easing: Easing.inOut(Easing.sin) }), -1, true);
-    scanClock.value = withRepeat(
-      withTiming(1, { duration: 4000, easing: Easing.linear }), -1, false);
-  }, []);
+    growScale.value = 0.01;
+    growScale.value = withSpring(1, { damping: 14, stiffness: 120, mass: 0.8 });
+  }, [slices]);
 
-  const scanMatrix = useDerivedValue(() => {
-    const m = Skia.Matrix();
-    m.rotate(scanClock.value * Math.PI * 2, cx, cy);
-    return m.get();
-  });
-
-  // ── 樣板路徑（Path1DPathEffect）──
-  const tickMark = useMemo(() =>
-    Skia.PathBuilder.Make().moveTo(0, -2.5).lineTo(0, 2.5).build()
-  , []);
-
-  const shieldDash = useMemo(() =>
-    Skia.PathBuilder.Make().addArc({ x: -8, y: -1.5, width: 16, height: 3 }, 180, 180).build()
-  , []);
-
-  // ── 每個切片的路徑 + 局部漸層資訊（JS Thread, useMemo）──
-  const segments = useMemo(() => {
-    if (total === 0) return [];
-    const GAP = slices.length > 1 ? 3 : 0;
-    const result: {
-      path:       ReturnType<typeof Skia.Path.Make>;
-      color:      string;
-      nextColor:  string;
-      startDeg:   number;
-      endDeg:     number;
-    }[] = [];
-
-    let sd = -90;
-    slices.forEach((sl, idx) => {
-      const full = (sl.amount / total) * 360;
-      if (full < 1) { sd += full; return; }
-      const draw = Math.max(0, full - GAP);
-      if (draw < 0.5) { sd += full; return; }
-
-      const p = Skia.PathBuilder.Make()
-        .addArc(
-          { x: cx - rBlock, y: cy - rBlock, width: rBlock * 2, height: rBlock * 2 },
-          sd + GAP / 2, draw,
-        )
-        .build();
-
-      // 下一個切片的顏色（環狀）
-      const nextIdx = (idx + 1) % slices.length;
-      result.push({
-        path:      p,
-        color:     sl.color,
-        nextColor: slices[nextIdx].color,
-        startDeg:  sd + GAP / 2,
-        endDeg:    sd + GAP / 2 + draw,
-      });
-      sd += full;
-    });
-    return result;
-  }, [slices, total, cx, cy, rBlock]);
+  // Skia Group transform 需要 useDerivedValue
+  const transform = useDerivedValue(() => [
+    { translateX: cx },
+    { translateY: cy },
+    { scale: growScale.value },
+    { translateX: -cx },
+    { translateY: -cy },
+  ]);
 
   return (
-    <View style={{ alignItems: 'center', justifyContent: 'center' }}>
-      <Canvas style={{ width: CANVAS, height: CANVAS }}>
+    <View style={{ width: size, height: size }}>
+      <Canvas style={{ width: size, height: size }}>
+        <Group transform={transform} clip={clipPath}>
 
-        {/* ── 背景雷達掃描暈 ── */}
-        <Circle cx={cx} cy={cy} r={rShield} opacity={0.12}>
-          <SweepGradient
-            c={vec(cx, cy)}
-            colors={['transparent', 'rgba(160,210,255,0.04)', 'rgba(160,210,255,0.25)', 'transparent']}
-            matrix={scanMatrix}
-          />
-        </Circle>
+          {/* ═════ Layer 0：玻璃溝槽底座 ═════ */}
+          {/* 最底層：深色投影，塑造凹槽深度 */}
+          <Circle cx={cx} cy={cy} r={r} color="rgba(0,0,0,0.15)" style="stroke" strokeWidth={strokeW} />
+          {/* 中間層：白霧，玻璃材質感 */}
+          <Circle cx={cx} cy={cy} r={r} color="rgba(255,255,255,0.40)" style="stroke" strokeWidth={strokeW} />
+          {/* 頂層：內陰影，凹槽立體感靈魂 */}
+          <Circle cx={cx} cy={cy} r={r} color="rgba(0,0,0,0.20)" style="stroke" strokeWidth={strokeW}>
+            <BlurMask blur={3} style="inner" />
+          </Circle>
 
-        {/* ── LAYER 1: 外圍護盾 ── */}
-        <Circle cx={cx} cy={cy} r={rShield}
-          color="rgba(255,255,255,0.18)" style="stroke" strokeWidth={1}>
-          <Path1DPathEffect path={shieldDash} advance={40} phase={0} style="rotate" />
-        </Circle>
-        <Circle cx={cx} cy={cy} r={rShield - 3}
-          color="rgba(255,255,255,0.07)" style="stroke" strokeWidth={0.5} />
-
-        {/* ── LAYER 2: 刻度盤 ── */}
-        <Circle cx={cx} cy={cy} r={rTick}
-          color="rgba(255,255,255,0.28)" style="stroke" strokeWidth={1}>
-          <Path1DPathEffect path={tickMark} advance={7} phase={0} style="rotate" />
-        </Circle>
-        <Circle cx={cx} cy={cy} r={rTick - 4}
-          color="rgba(255,255,255,0.12)" style="stroke" strokeWidth={0.7} />
-
-        {/* ── LAYER 3: 能量槽底座 ── */}
-        <Circle cx={cx} cy={cy} r={rBlock} color="#0e1015" style="stroke" strokeWidth={blockW} />
-
-        {/* ── LAYER 4: 分段能量塊（局部 SweepGradient）── */}
-        {segments.map((seg, i) => {
-          // 局部漸層：從 seg.color 漸變到 nextColor，精確覆蓋此切片的角度範圍
-          const startRad = (seg.startDeg * Math.PI) / 180;
-          const endRad   = (seg.endDeg   * Math.PI) / 180;
-          // 在切片內插入 5 個色階，讓漸層平滑
-          const STEPS = 5;
-          const gradColors = Array.from({ length: STEPS + 1 }, (_, k) =>
-            lerpColor(seg.color, seg.nextColor, k / STEPS),
-          );
-          // SweepGradient 的 start/end 對應切片角度
-          const gradStops = Array.from({ length: STEPS + 1 }, (_, k) => k / STEPS);
-
-          return (
+          {/* ═════ Layer 1：彩色果凍條 ═════ */}
+          {paths.map((sl, i) => (
             <Group key={i}>
-              {/* 實體方塊 + 局部漸層 */}
-              <Path path={seg.path} style="stroke" strokeWidth={blockW}>
-                <DashPathEffect intervals={[16, 4]} />
-                <SweepGradient
-                  c={vec(cx, cy)}
-                  colors={gradColors}
-                  positions={gradStops}
-                  start={startRad}
-                  end={endRad}
-                />
+              {/* 底部光暈 Bloom（調低透明度，避免搶走本體質感）*/}
+              <Path
+                path={sl.d}
+                color={sl.color}
+                style="stroke"
+                strokeWidth={strokeW}
+                strokeCap="round"
+                opacity={0.3}
+              >
+                <BlurMask blur={8} style="normal" />
               </Path>
-
-              {/* 外層廣角 Bloom */}
-              <Path path={seg.path} style="stroke" strokeWidth={blockW + 10}
-                opacity={0.22} blendMode="screen">
-                <DashPathEffect intervals={[16, 4]} />
-                <BlurMask blur={10} style="normal" />
-                <SweepGradient
-                  c={vec(cx, cy)}
-                  colors={gradColors}
-                  positions={gradStops}
-                  start={startRad}
-                  end={endRad}
-                />
-              </Path>
-
-              {/* 中層 Glow */}
-              <Path path={seg.path} style="stroke" strokeWidth={blockW + 2}
-                opacity={0.55} blendMode="screen">
-                <DashPathEffect intervals={[16, 4]} />
-                <BlurMask blur={4} style="normal" />
-                <SweepGradient
-                  c={vec(cx, cy)}
-                  colors={gradColors}
-                  positions={gradStops}
-                  start={startRad}
-                  end={endRad}
-                />
-              </Path>
-
-              {/* 頂部白色亮芯（柔化，避免硬邊突兀）*/}
-              <Path path={seg.path} color="rgba(255,255,255,0.28)"
-                style="stroke" strokeWidth={blockW * 0.4} blendMode="screen">
-                <DashPathEffect intervals={[16, 4]} />
-                <BlurMask blur={2.5} style="normal" />
+              {/* 果凍本體（提升 opacity 確保飽和度）*/}
+              <Path
+                path={sl.d}
+                color={sl.color}
+                style="stroke"
+                strokeWidth={strokeW}
+                strokeCap="round"
+                opacity={0.9}
+              />
+              {/* 頂部高光 Glaze — 微上偏模擬凸面玻璃反光 */}
+              <Path
+                path={sl.d}
+                color="rgba(255,255,255,0.70)"
+                style="stroke"
+                strokeWidth={strokeW * 0.4}
+                strokeCap="round"
+                transform={[{ translateY: -strokeW * 0.1 }]}
+              >
+                <BlurMask blur={1.5} style="normal" />
               </Path>
             </Group>
-          );
-        })}
+          ))}
 
-        {/* 空資料時顯示暗色軌道 */}
-        {total === 0 && (
-          <Circle cx={cx} cy={cy} r={rBlock}
-            color="rgba(255,255,255,0.06)" style="stroke" strokeWidth={blockW} />
-        )}
-
-        {/* ── LAYER 5: 內層深色圓盤 ── */}
-        <Circle cx={cx} cy={cy} r={rInner} color="#12151c" />
-        <Circle cx={cx} cy={cy} r={rInner}
-          color="rgba(255,255,255,0.35)" style="stroke" strokeWidth={1.5} />
-        <Circle cx={cx} cy={cy} r={rInner - 3}
-          color="rgba(255,255,255,0.08)" style="stroke" strokeWidth={0.5} />
-
+        </Group>
       </Canvas>
 
-      {/* 中央文字 */}
-      {!!labelTxt && (
-        <View style={StyleSheet.absoluteFill} pointerEvents="none">
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-            <Text style={sty.centerAmt} numberOfLines={1} adjustsFontSizeToFit>
-              {labelTxt}
-            </Text>
-            <Text style={sty.centerNT}>NT$</Text>
-          </View>
+      {/* ═════ Layer 2：中心文字（Canvas 外） ═════ */}
+      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+        <View style={styles.centerWrap}>
+          {total === 0 ? (
+            <Text style={styles.emptyText}>尚無資料</Text>
+          ) : (
+            <>
+              <Text style={styles.amountText}>{fmtCenter(total)}</Text>
+              <Text style={styles.currencyText}>NT$</Text>
+            </>
+          )}
         </View>
-      )}
-      {total === 0 && (
-        <View style={StyleSheet.absoluteFill} pointerEvents="none">
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-            <Text style={sty.empty}>尚無資料</Text>
-          </View>
-        </View>
-      )}
+      </View>
     </View>
   );
 }
 
-const sty = StyleSheet.create({
-  centerAmt: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '800',
-    fontFamily: 'monospace',
-    letterSpacing: 0.5,
-    textShadowColor: 'rgba(255,255,255,0.7)',
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 6,
-    width: 64,
-    textAlign: 'center',
+const styles = StyleSheet.create({
+  centerWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  centerNT: {
-    color: 'rgba(255,255,255,0.45)',
-    fontSize: 9,
-    fontWeight: '600',
-    letterSpacing: 1.5,
-    marginTop: 1,
+  // 白色 + 雙層投影（無論背景深淺都清晰）
+  amountText: {
+    color:            '#FFFFFF',
+    fontSize:         22,
+    fontWeight:       '800',
+    letterSpacing:    0.5,
+    textShadowColor:  'rgba(0,0,0,0.55)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
   },
-  empty: {
-    color: 'rgba(255,255,255,0.25)',
-    fontSize: 11,
-    fontWeight: '600',
+  currencyText: {
+    color:            'rgba(255,255,255,0.75)',
+    fontSize:         11,
+    fontWeight:       '700',
+    marginTop:        2,
+    letterSpacing:    1,
+    textShadowColor:  'rgba(0,0,0,0.4)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+  emptyText: {
+    color:            'rgba(255,255,255,0.6)',
+    fontSize:         13,
+    fontWeight:       '600',
+    textShadowColor:  'rgba(0,0,0,0.35)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
 });

@@ -49,8 +49,9 @@ export interface FabPosition {
 
 // ── 背景圖設定（持久化）──
 export interface BgSettings {
-  opacity: number;
-  fileUri: string | null;
+  opacity:  number;
+  fileUri:  string | null;
+  textMode: 'dark' | 'light'; // 深色文字 / 淺色文字（配合桌布）
 }
 
 // ── 圓餅切片 ──

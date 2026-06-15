@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
+import { textShadows } from '../theme';
 
 interface LegendItem {
   label:  string;
@@ -28,6 +29,6 @@ const styles = StyleSheet.create({
   grid:  { flexDirection: 'row', flexWrap: 'wrap', marginTop: 8, gap: 4 },
   row:   { flexDirection: 'row', alignItems: 'center', gap: 4, width: '48%' },
   dot:   { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
-  label: { flex: 1, fontSize: 11, color: '#A0A5B0' },
-  pct:   { fontSize: 11, fontWeight: '700', color: '#E0E0E0' },
+  label: { flex: 1, fontSize: 11, color: '#475569', ...textShadows.light },
+  pct:   { fontSize: 11, fontWeight: '700', color: '#1E293B', ...textShadows.heavy },
 });

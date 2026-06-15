@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useBudgetStore } from '../store/useBudgetStore';
-import { colors, radius, spacing, fontSize, shadows, glows } from '../theme';
+import { colors, radius, spacing, fontSize, shadows, glows, textShadows } from '../theme';
 import { GlassCard } from '../components/GlassCard';
 import { exportExcel, importExcel } from '../utils/excel';
 import * as DocumentPicker from 'expo-document-picker';
@@ -73,17 +73,17 @@ export function SettingsScreen() {
       quality: 0.85,
     });
     if (result.canceled) return;
-    saveBgSettings({ fileUri: result.assets[0].uri, opacity: bgSettings.opacity });
+    saveBgSettings({ ...bgSettings, fileUri: result.assets[0].uri, opacity: bgSettings.opacity });
     showToast('✅ 背景圖已更新');
   };
 
   const handleRemoveBg = () => {
-    saveBgSettings({ fileUri: null, opacity: bgSettings.opacity });
+    saveBgSettings({ ...bgSettings, fileUri: null, opacity: bgSettings.opacity });
     showToast('🗑️ 已移除背景圖');
   };
 
   const handleSetOpacity = (val: number) => {
-    saveBgSettings({ fileUri: bgSettings.fileUri, opacity: val });
+    saveBgSettings({ ...bgSettings, fileUri: bgSettings.fileUri, opacity: val });
   };
 
   const handleClearAll = () => {
@@ -166,7 +166,7 @@ export function SettingsScreen() {
           </View>
           <Pressable style={styles.saveBtn} onPress={handleSave}>
             <View style={styles.btnInner}>
-              <Feather name="check" size={17} color="#fff" />
+              <Feather name="check" size={17} color={colors.income} />
               <Text style={styles.saveBtnText}>套用設定</Text>
             </View>
           </Pressable>
@@ -205,6 +205,8 @@ export function SettingsScreen() {
               <View style={styles.bgPreviewOverlay} pointerEvents="none">
                 <Text style={styles.bgPreviewLabel}>目前背景</Text>
               </View>
+              {/* 白色內描邊：模擬嵌入式小螢幕 */}
+              <View style={styles.bgPreviewInnerBorder} pointerEvents="none" />
             </View>
           ) : (
             <View style={styles.bgEmpty}>
@@ -215,17 +217,17 @@ export function SettingsScreen() {
 
           {/* 選取 / 移除按鈕 */}
           <View style={styles.bgBtnRow}>
-            <Pressable style={[styles.bgBtn, { backgroundColor: '#37474F' }]} onPress={handlePickBg}>
+            <Pressable style={[styles.bgBtn, styles.bgBtnPick]} onPress={handlePickBg}>
               <View style={styles.btnInner}>
-                <Feather name="image" size={16} color="#fff" />
-                <Text style={styles.bgBtnText}>選取相片</Text>
+                <Feather name="image" size={16} color={colors.textSecondary} />
+                <Text style={[styles.bgBtnText, { color: colors.textSecondary }]}>選取相片</Text>
               </View>
             </Pressable>
             {bgSettings.fileUri && (
-              <Pressable style={[styles.bgBtn, { backgroundColor: '#B71C1C' }]} onPress={handleRemoveBg}>
+              <Pressable style={[styles.bgBtn, styles.bgBtnRemove]} onPress={handleRemoveBg}>
                 <View style={styles.btnInner}>
-                  <Feather name="x" size={16} color="#fff" />
-                  <Text style={styles.bgBtnText}>移除</Text>
+                  <Feather name="x" size={16} color={colors.expense} />
+                  <Text style={[styles.bgBtnText, { color: colors.expense }]}>移除</Text>
                 </View>
               </Pressable>
             )}
@@ -252,21 +254,49 @@ export function SettingsScreen() {
               </Pressable>
             ))}
           </View>
+
+          {/* 文字顏色模式 */}
+          <View style={[styles.row, styles.rowBorder]}>
+            <Feather name="type" size={20} color="#64748B" style={styles.rowIcon} />
+            <View style={styles.rowInfo}>
+              <Text style={styles.rowLabel}>首頁文字顏色</Text>
+              <Text style={styles.rowSub}>依桌布亮度切換</Text>
+            </View>
+          </View>
+          <View style={styles.textModeRow}>
+            {(['dark', 'light'] as const).map(mode => {
+              const active = bgSettings.textMode === mode;
+              return (
+                <Pressable
+                  key={mode}
+                  style={[styles.textModeBtn, active && styles.textModeBtnActive]}
+                  onPress={() => saveBgSettings({ ...bgSettings, textMode: mode })}
+                >
+                  <Text style={{ fontSize: 16, marginRight: 6 }}>
+                    {mode === 'dark' ? '⚫' : '⚪'}
+                  </Text>
+                  <Text style={[styles.textModeBtnText, active && styles.textModeBtnTextActive]}>
+                    {mode === 'dark' ? '深色文字' : '淺色文字'}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
         </GlassCard>
 
         {/* 匯出 / 匯入 */}
         <GlassCard style={styles.section}>
           <Text style={styles.sectionTitle}>備份與還原</Text>
-          <Pressable style={[styles.actionBtn, { backgroundColor: '#1B5E20' }]} onPress={handleExport}>
+          <Pressable style={[styles.actionBtn, styles.actionBtnMint]} onPress={handleExport}>
             <View style={styles.btnInner}>
-              <Feather name="upload-cloud" size={18} color="#fff" />
-              <Text style={styles.actionBtnText}>匯出 Excel 報表</Text>
+              <Feather name="upload-cloud" size={18} color={colors.income} />
+              <Text style={[styles.actionBtnText, { color: colors.income }]}>匯出 Excel 報表</Text>
             </View>
           </Pressable>
-          <Pressable style={[styles.actionBtn, { backgroundColor: '#1565C0', marginTop: 10 }]} onPress={handleImport}>
+          <Pressable style={[styles.actionBtn, styles.actionBtnCyan, { marginTop: 10 }]} onPress={handleImport}>
             <View style={styles.btnInner}>
-              <Feather name="download-cloud" size={18} color="#fff" />
-              <Text style={styles.actionBtnText}>匯入 Excel 備份</Text>
+              <Feather name="download-cloud" size={18} color={colors.credit} />
+              <Text style={[styles.actionBtnText, { color: colors.credit }]}>匯入 Excel 備份</Text>
             </View>
           </Pressable>
         </GlassCard>
@@ -275,10 +305,10 @@ export function SettingsScreen() {
         <GlassCard style={styles.section}>
           <Text style={styles.sectionTitle}>危險操作</Text>
           {!showClearConfirm ? (
-            <Pressable style={[styles.actionBtn, { backgroundColor: '#B71C1C' }]} onPress={() => setShowClearConfirm(true)}>
+            <Pressable style={[styles.actionBtn, styles.actionBtnGhost]} onPress={() => setShowClearConfirm(true)}>
               <View style={styles.btnInner}>
-                <Feather name="trash-2" size={18} color="#fff" />
-                <Text style={styles.actionBtnText}>清除全部記錄</Text>
+                <Feather name="trash-2" size={18} color={colors.expense} />
+                <Text style={[styles.actionBtnText, { color: colors.expense }]}>清除全部記錄</Text>
               </View>
             </Pressable>
           ) : (
@@ -337,10 +367,11 @@ const styles = StyleSheet.create({
   rowSub:     { fontSize: fontSize.base, color: colors.textMuted, marginTop: 2 },
 
   input: {
-    borderWidth: 1.5, borderColor: 'rgba(0,0,0,0.1)', borderRadius: radius.sm,
+    borderBottomWidth: 2, borderBottomColor: 'rgba(0,0,0,0.09)',
+    borderRadius: radius.sm,
     paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
     fontSize: fontSize.lg, fontFamily: 'monospace',
-    backgroundColor: 'rgba(255,255,255,0.8)', width: 110, textAlign: 'right',
+    backgroundColor: 'rgba(0,0,0,0.03)', width: 110, textAlign: 'right',
     color: colors.textPrimary,
   },
 
@@ -353,12 +384,17 @@ const styles = StyleSheet.create({
 
   saveBtn: {
     marginTop: spacing.lg, padding: spacing.lg, borderRadius: radius.md,
-    backgroundColor: '#1B5E20', alignItems: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(52,211,153,0.15)',
+    borderWidth: 1.5, borderColor: 'rgba(52,211,153,0.40)',
   },
-  saveBtnText: { color: colors.textWhite, fontSize: fontSize.xl, fontWeight: '700' },
+  saveBtnText: { color: colors.income, fontSize: fontSize.xl, fontWeight: '700', ...textShadows.light },
 
-  actionBtn:     { padding: spacing.lg, borderRadius: radius.md, alignItems: 'center' },
-  actionBtnText: { color: colors.textWhite, fontSize: fontSize.xl, fontWeight: '700' },
+  actionBtn:      { padding: spacing.lg, borderRadius: radius.md, alignItems: 'center', borderWidth: 1.5 },
+  actionBtnMint:  { backgroundColor: 'rgba(52,211,153,0.12)', borderColor: 'rgba(52,211,153,0.35)' },
+  actionBtnCyan:  { backgroundColor: 'rgba(56,189,248,0.12)', borderColor: 'rgba(56,189,248,0.35)' },
+  actionBtnGhost: { backgroundColor: 'rgba(244,114,182,0.10)', borderColor: 'rgba(244,114,182,0.35)' },
+  actionBtnText:  { fontSize: fontSize.xl, fontWeight: '700', ...textShadows.light },
 
   confirmBox: {
     backgroundColor: 'rgba(251,113,133,0.1)', borderRadius: radius.sm,
@@ -389,24 +425,38 @@ const styles = StyleSheet.create({
   },
   bgEmptyText: { color: colors.textHint, fontSize: fontSize.lg },
   bgBtnRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.xs },
-  bgBtn: {
-    flex: 1, padding: spacing.md, borderRadius: radius.sm,
-    alignItems: 'center', justifyContent: 'center',
+  bgBtn:       { flex: 1, padding: spacing.md, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5 },
+  bgBtnPick:   { backgroundColor: 'rgba(71,85,105,0.10)', borderColor: 'rgba(71,85,105,0.25)' },
+  bgBtnRemove: { backgroundColor: 'rgba(244,114,182,0.10)', borderColor: 'rgba(244,114,182,0.35)' },
+  bgBtnText:   { fontSize: fontSize.lg, fontWeight: '700' },
+
+  bgPreviewInnerBorder: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    borderRadius: radius.sm,
+    borderWidth: 2, borderColor: 'rgba(255,255,255,0.55)',
   },
-  bgBtnText: { color: colors.textWhite, fontSize: fontSize.lg, fontWeight: '700' },
-  opacityRow: {
-    flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: spacing.md,
-  },
+
+  opacityRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: spacing.md },
   opacityBtn: {
     flex: 1, minWidth: 48, paddingVertical: spacing.sm, borderRadius: radius.sm,
     alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.5)',
     borderWidth: 1, borderColor: 'rgba(0,0,0,0.08)',
   },
-  opacityBtnActive: {
-    backgroundColor: '#1B5E20', borderColor: '#1B5E20',
-  },
+  opacityBtnActive: { backgroundColor: 'rgba(52,211,153,0.20)', borderColor: colors.income },
   opacityBtnText:       { fontSize: fontSize.md, fontWeight: '600', color: colors.textSecondary },
-  opacityBtnTextActive: { color: colors.textWhite },
+  opacityBtnTextActive: { color: colors.income, fontWeight: '700' },
+
+  // 文字顏色切換
+  textModeRow: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.md },
+  textModeBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingVertical: spacing.md, borderRadius: radius.sm,
+    backgroundColor: 'rgba(255,255,255,0.5)',
+    borderWidth: 1.5, borderColor: 'rgba(0,0,0,0.08)',
+  },
+  textModeBtnActive:     { backgroundColor: 'rgba(55,71,79,0.85)', borderColor: 'rgba(55,71,79,0.6)' },
+  textModeBtnText:       { fontSize: fontSize.md, fontWeight: '600', color: colors.textSecondary },
+  textModeBtnTextActive: { color: colors.textWhite },
 
   toast: {
     position: 'absolute', bottom: 90, alignSelf: 'center',

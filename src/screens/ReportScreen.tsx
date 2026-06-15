@@ -19,7 +19,7 @@ import { useBudgetStore } from '../store/useBudgetStore';
 import { fmt } from '../utils/format';
 import { localDateStr } from '../utils/period';
 import { Period } from '../types';
-import { colors, radius, spacing, fontSize } from '../theme';
+import { colors, radius, spacing, fontSize, textShadows } from '../theme';
 import { GlassCard } from '../components/GlassCard';
 
 // ── NT$ 格式（帶千位逗號）────────────────────
@@ -98,61 +98,59 @@ export function ReportScreen() {
           <Text style={sty.headerTitle}>月結報表</Text>
         </View>
 
-        {/* ── 表格卡片：與 SettingsScreen 同樣直接用 GlassCard，不加外層 elevation View ── */}
-        <GlassCard style={sty.card}>
+        {/* ── 表頭 ── */}
+        <View style={sty.thead}>
+          <Text numberOfLines={1} style={[sty.th, sty.colPeriod]}>週期</Text>
+          <Text numberOfLines={1} style={[sty.th, sty.colNum]}>月初餘額</Text>
+          <Text numberOfLines={1} style={[sty.th, sty.colNum]}>現金支出</Text>
+          <Text numberOfLines={1} style={[sty.th, sty.colNum, { fontWeight: '800' }]}>月底結餘</Text>
+        </View>
 
-          {/* 表頭 */}
-          <View style={sty.thead}>
-            <Text style={[sty.th, sty.colPeriod]}>週期</Text>
-            <Text style={[sty.th, sty.colNum]}>月初餘額</Text>
-            <Text style={[sty.th, sty.colNum]}>現金支出</Text>
-            <Text style={[sty.th, sty.colNum]}>月底結餘</Text>
+        {/* ── 各列獨立懸浮卡片 ── */}
+        {rows.length === 0 ? (
+          <View style={sty.empty}>
+            <Text style={sty.emptyText}>尚無記帳資料</Text>
           </View>
-
-          {rows.length === 0 ? (
-            <View style={sty.empty}>
-              <Text style={sty.emptyText}>尚無記帳資料</Text>
-            </View>
-          ) : (
-            rows.map((row, idx) => {
-              const closeBal = row.openBal + row.net;
-              const isLast   = idx === rows.length - 1;
-              return (
-                <View
-                  key={row.p.startStr}
-                  style={[
-                    sty.tr,
-                    row.isCurrent && sty.trCurrent,
-                    isLast && sty.trLast,
-                  ]}
-                >
-                  {/* 週期 */}
-                  <View style={[sty.colPeriod, { flexDirection: 'row', alignItems: 'center' }]}>
-                    <Text style={sty.tdPeriod}>{row.p.label}</Text>
-                    {row.isCurrent && <Text style={sty.dot}> ●</Text>}
-                  </View>
-
-                  {/* 月初餘額 */}
-                  <Text style={[sty.td, sty.colNum, sty.tdAmt,
-                    row.openBal >= 0 ? sty.amtPos : sty.amtNeg]}>
-                    {fmtNT(row.openBal)}
-                  </Text>
-
-                  {/* 現金支出（永遠紅色）*/}
-                  <Text style={[sty.td, sty.colNum, sty.tdAmt, sty.amtNeg]}>
-                    {row.cashExp > 0 ? fmtNT(row.cashExp) : '—'}
-                  </Text>
-
-                  {/* 月底結餘 */}
-                  <Text style={[sty.td, sty.colNum, sty.tdAmt,
-                    closeBal >= 0 ? sty.amtPos : sty.amtNeg]}>
-                    {fmtNT(closeBal)}
-                  </Text>
+        ) : (
+          rows.map((row) => {
+            const closeBal = row.openBal + row.net;
+            return (
+              <GlassCard
+                key={row.p.startStr}
+                style={[sty.tr, row.isCurrent && sty.trCurrent]}
+                colorTop={row.isCurrent ? 'rgba(52,211,153,0.18)' : 'rgba(255,255,255,0.42)'}
+                colorBot={row.isCurrent ? 'rgba(52,211,153,0.06)' : 'rgba(255,255,255,0.10)'}
+                borderRadius={radius.md}
+              >
+                {/* 週期 */}
+                <View style={[sty.colPeriod, { flexDirection: 'row', alignItems: 'center' }]}>
+                  <Text style={[sty.tdPeriod, textShadows.light]}>{row.p.label}</Text>
+                  {row.isCurrent && <Text style={sty.dot}> ●</Text>}
                 </View>
-              );
-            })
-          )}
-        </GlassCard>
+
+                {/* 月初餘額 */}
+                <Text numberOfLines={1} adjustsFontSizeToFit
+                  style={[sty.td, sty.colNum, sty.tdAmt, textShadows.light,
+                  row.openBal >= 0 ? sty.amtPos : sty.amtNeg]}>
+                  {fmtNT(row.openBal)}
+                </Text>
+
+                {/* 現金支出（粉彩紅）*/}
+                <Text numberOfLines={1} adjustsFontSizeToFit
+                  style={[sty.td, sty.colNum, sty.tdAmt, textShadows.light, sty.amtNeg]}>
+                  {row.cashExp > 0 ? fmtNT(row.cashExp) : '—'}
+                </Text>
+
+                {/* 月底結餘（薰衣草紫，800 加粗）*/}
+                <Text numberOfLines={1} adjustsFontSizeToFit
+                  style={[sty.td, sty.colNum, sty.tdAmt, textShadows.light,
+                  { fontWeight: '800', color: closeBal >= 0 ? colors.savings : colors.expense }]}>
+                  {fmtNT(closeBal)}
+                </Text>
+              </GlassCard>
+            );
+          })
+        )}
 
         {/* ── 備註說明 ── */}
         <View style={sty.noteWrap}>
@@ -170,8 +168,6 @@ export function ReportScreen() {
 }
 
 // ── Styles ───────────────────────────────────
-const COL_PERIOD = 100;   // 週期欄固定寬
-
 const sty = StyleSheet.create({
   root:    { flex: 1, backgroundColor: colors.appBg },
   scroll:  { flex: 1 },
@@ -182,49 +178,43 @@ const sty = StyleSheet.create({
   headerSub:   { fontSize: fontSize.md, color: colors.textMuted, marginBottom: spacing.xs },
   headerTitle: { fontSize: fontSize.h1, fontWeight: '700', color: colors.textPrimary },
 
-  // 卡片（與 SettingsScreen 同樣：直接 GlassCard，無外層 elevation）
-  card: {
-    marginHorizontal:  spacing.xl,
-    borderRadius:      radius.xl,
-    paddingHorizontal: spacing.xs,
-    overflow:          'hidden',
-  },
-
-  // 表頭
+  // 表頭（不需要卡片，直接懸空在列表上方）
   thead: {
-    flexDirection: 'row',
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.md,
-    borderBottomWidth: 2,
-    borderBottomColor: 'rgba(220,220,220,0.7)',
+    flexDirection:     'row',
+    paddingVertical:   spacing.sm,
+    paddingHorizontal: spacing.xl,
+    marginHorizontal:  spacing.xl,
+    marginBottom:      spacing.xs,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(200,210,220,0.5)',
   },
   th: {
-    fontSize: fontSize.base,
-    color:    colors.textMuted,
+    fontSize:   12,
+    color:      colors.textMuted,
     fontWeight: '700',
+    ...textShadows.light,
   },
 
-  // 欄寬定義
-  colPeriod: { flex: 0, width: COL_PERIOD },
-  colNum:    { flex: 1, textAlign: 'right' },
+  // 欄寬：週期 flex:2，數字欄各 flex:2.5，每欄左側有 paddingLeft 間距
+  colPeriod: { flex: 2 },
+  colNum:    { flex: 2.5, textAlign: 'right', paddingLeft: 8 },
 
-  // 資料列
+  // 各列：獨立懸浮 GlassCard
   tr: {
-    flexDirection: 'row',
+    flexDirection:     'row',
     paddingVertical:   spacing.md,
-    paddingHorizontal: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(220,220,220,0.5)',
-    alignItems: 'center',
+    paddingHorizontal: spacing.lg,
+    marginHorizontal:  spacing.xl,
+    marginBottom:      spacing.xs,
+    alignItems:        'center',
   },
-  trCurrent: { backgroundColor: 'rgba(46,125,50,0.06)' },
-  trLast:    { borderBottomWidth: 0 },
+  trCurrent: { /* colorTop/Bot 由 GlassCard prop 控制，這裡不再需要 backgroundColor */ },
 
-  td:       { fontSize: fontSize.md },
-  tdAmt:    { fontWeight: '700' },
+  td:    { fontSize: 13 },
+  tdAmt: { fontWeight: '700', fontSize: 13 },
 
   // 週期欄
-  tdPeriod: { fontSize: fontSize.md, fontWeight: '600', color: colors.textPrimary },
+  tdPeriod: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
   dot:      { fontSize: fontSize.xs, color: colors.periodDot },
 
   // 金額顏色

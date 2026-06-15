@@ -65,7 +65,7 @@ export const glows = {
     shadowOffset:    { width: 0, height: 12 },
     shadowOpacity:   0.08,
     shadowRadius:    24,
-    elevation:       8,
+    elevation:       0,
     backgroundColor: 'transparent',
   } satisfies ViewStyle,
 
@@ -74,7 +74,7 @@ export const glows = {
     shadowOffset:    { width: 0, height: 10 },
     shadowOpacity:   0.35,
     shadowRadius:    20,
-    elevation:       12,
+    elevation:       0,
     backgroundColor: 'transparent',
   } satisfies ViewStyle,
 
@@ -83,7 +83,7 @@ export const glows = {
     shadowOffset:    { width: 0, height: 10 },
     shadowOpacity:   0.35,
     shadowRadius:    20,
-    elevation:       12,
+    elevation:       0,
     backgroundColor: 'transparent',
   } satisfies ViewStyle,
 
@@ -92,7 +92,7 @@ export const glows = {
     shadowOffset:    { width: 0, height: 10 },
     shadowOpacity:   0.35,
     shadowRadius:    20,
-    elevation:       12,
+    elevation:       0,
     backgroundColor: 'transparent',
   } satisfies ViewStyle,
 
@@ -101,15 +101,39 @@ export const glows = {
     shadowOffset:    { width: 0, height: 10 },
     shadowOpacity:   0.35,
     shadowRadius:    20,
-    elevation:       12,
+    elevation:       0,
     backgroundColor: 'transparent',
   } satisfies ViewStyle,
 
   // 向下相容
-  incomeGlow:  { shadowColor: colors.income,  shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.35, shadowRadius: 20, elevation: 12, backgroundColor: 'transparent' } satisfies ViewStyle,
-  expenseGlow: { shadowColor: colors.expense, shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.35, shadowRadius: 20, elevation: 12, backgroundColor: 'transparent' } satisfies ViewStyle,
-  creditGlow:  { shadowColor: colors.credit,  shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.35, shadowRadius: 20, elevation: 12, backgroundColor: 'transparent' } satisfies ViewStyle,
-  savingsGlow: { shadowColor: colors.savings, shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.35, shadowRadius: 20, elevation: 12, backgroundColor: 'transparent' } satisfies ViewStyle,
+  incomeGlow:  { shadowColor: colors.income,  shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.35, shadowRadius: 20, elevation: 0, backgroundColor: 'transparent' } satisfies ViewStyle,
+  expenseGlow: { shadowColor: colors.expense, shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.35, shadowRadius: 20, elevation: 0, backgroundColor: 'transparent' } satisfies ViewStyle,
+  creditGlow:  { shadowColor: colors.credit,  shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.35, shadowRadius: 20, elevation: 0, backgroundColor: 'transparent' } satisfies ViewStyle,
+  savingsGlow: { shadowColor: colors.savings, shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.35, shadowRadius: 20, elevation: 0, backgroundColor: 'transparent' } satisfies ViewStyle,
+} as const;
+
+// ─────────────────────────────────────────
+// 文字陰影預設集（供全域引用）
+// ─────────────────────────────────────────
+export const textShadows = {
+  /** 淺陰影：一般卡片內文字 */
+  light: {
+    textShadowColor:  'rgba(0, 0, 0, 0.28)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  /** 重陰影：金額、標題等關鍵文字 */
+  heavy: {
+    textShadowColor:  'rgba(0, 0, 0, 0.48)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  /** 淺色背景版（深色文字 + 白色光暈，對抗深色背景）*/
+  lightOnDark: {
+    textShadowColor:  'rgba(255, 255, 255, 0.55)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
 } as const;
 
 export const shadows = {
@@ -119,4 +143,5 @@ export const shadows = {
   savings:  glows.savingsGlow,
   report:   glows.base,
 } as const;
+
 

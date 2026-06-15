@@ -87,11 +87,11 @@ const styles = StyleSheet.create({
   content:        { flex: 1 },
   tabBar: {
     flexDirection:   'row',
-    backgroundColor: colors.tabBar,
+    backgroundColor: 'rgba(248,250,252,0.78)',
     borderTopWidth:  1,
-    borderTopColor:  'rgba(220,225,230,0.8)',
+    borderTopColor:  'rgba(255,255,255,0.9)',
     paddingTop:      8,
-    elevation:       10,
+    // 不用 elevation，改用 border 避免 Android 強制白底
   },
   tabItem:        { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 3, paddingBottom: 4 },
   tabLabel:       { fontSize: fontSize.sm, fontWeight: '600', color: '#aaa' },

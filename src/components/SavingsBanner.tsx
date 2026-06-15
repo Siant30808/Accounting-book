@@ -50,14 +50,14 @@ export function SavingsBanner({ totalSavings, onPress }: SavingsBannerProps) {
     );
   }, []);
 
-  // ── 色塊 A：主紫，利薩茹橢圓軌道（直接用相位角，無需 *2π）──
+  // ── 色塊 A：主紫，橢圓軌道（只用整數倍相位，頭尾值相同確保無縫循環）──
   const aX = useDerivedValue(() => {
     'worklet';
     return 80 + Math.cos(timeA.value) * 90;
   });
   const aY = useDerivedValue(() => {
     'worklet';
-    return CARD_H * 0.5 + Math.sin(timeB.value * 0.7) * CARD_H * 0.35;
+    return CARD_H * 0.5 + Math.sin(timeB.value) * CARD_H * 0.35;
   });
   const aR = useDerivedValue(() => {
     'worklet';
@@ -67,29 +67,29 @@ export function SavingsBanner({ totalSavings, onPress }: SavingsBannerProps) {
   // ── 色塊 B：亮紫，斜向漂移 ──
   const bX = useDerivedValue(() => {
     'worklet';
-    return 220 + Math.cos(timeB.value * 1.3) * 80;
+    return 220 + Math.cos(timeB.value) * 80;
   });
   const bY = useDerivedValue(() => {
     'worklet';
-    return CARD_H * 0.4 + Math.sin(timeA.value * 0.9) * CARD_H * 0.4;
+    return CARD_H * 0.4 + Math.sin(timeA.value) * CARD_H * 0.4;
   });
   const bR = useDerivedValue(() => {
     'worklet';
-    return 90 + Math.cos(timeA.value * 1.1) * 20;
+    return 90 + Math.cos(timeC.value) * 20;
   });
 
   // ── 色塊 C：賽博藍，慢速大圓 ──
   const cX = useDerivedValue(() => {
     'worklet';
-    return 160 + Math.sin(timeC.value * 0.6) * 100;
+    return 160 + Math.sin(timeC.value) * 100;
   });
   const cY = useDerivedValue(() => {
     'worklet';
-    return CARD_H * 0.55 + Math.cos(timeB.value * 0.5) * CARD_H * 0.4;
+    return CARD_H * 0.55 + Math.cos(timeB.value) * CARD_H * 0.4;
   });
   const cR = useDerivedValue(() => {
     'worklet';
-    return 100 + Math.sin(timeB.value * 0.8) * 22;
+    return 100 + Math.sin(timeA.value) * 22;
   });
 
   return (

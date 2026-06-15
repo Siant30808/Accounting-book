@@ -1,5 +1,5 @@
 /**
- * FabRobot.tsx ── 120Hz 零掉幀・極致水晶版 (完美厚玻璃質感與高光)
+ * FabRobot.tsx ── 120Hz 零掉幀・極致水晶版 (完美透亮不遮臉版)
  */
 import React, { useMemo, useEffect, useState, useRef, useCallback } from 'react';
 import { PanResponder, Dimensions } from 'react-native';
@@ -48,17 +48,6 @@ const LED_GRID = (() => {
 const CLIP_CIRCLE = (() => {
   const p = Skia.Path.Make();
   p.addCircle(CENTER, CENTER, RADIUS);
-  return p;
-})();
-
-// 微調半月反光罩的比例，讓它更飽滿
-const GLASS_OVAL = (() => {
-  const p  = Skia.Path.Make();
-  const w  = RADIUS * 1.6;
-  const h  = RADIUS * 1.0;
-  const ox = CENTER - w / 2;
-  const oy = CENTER - RADIUS * 0.95;
-  p.addOval(Skia.XYWHRect(ox, oy, w, h));
   return p;
 })();
 
@@ -265,7 +254,7 @@ export function FabRobot({ budgetPct = 0, onPress }: FabRobotProps) {
 
         {/* ══ LAYER 5 ── 球面亮暗深度 */}
         <Group clip={CLIP_CIRCLE}>
-          <Circle cx={CENTER - RADIUS * 0.35} cy={CENTER - RADIUS * 0.35} r={RADIUS * 0.55} color="rgba(255,255,255,0.15)">
+          <Circle cx={CENTER - RADIUS * 0.35} cy={CENTER - RADIUS * 0.35} r={RADIUS * 0.55} color="rgba(255,255,255,0.08)">
             <BlurMask blur={9} style="normal" />
           </Circle>
           <Circle cx={CENTER + RADIUS * 0.40} cy={CENTER + RADIUS * 0.45} r={RADIUS * 0.65} color="rgba(0,0,0,0.65)">
@@ -295,55 +284,52 @@ export function FabRobot({ budgetPct = 0, onPress }: FabRobotProps) {
           </Group>
         </Group>
 
-        {/* ══ LAYER 8 ── 頂級玻璃高光 (Skeuomorphic Glass) */}
+        {/* ══ LAYER 8 ── 邊緣月牙形高光（中心透亮，邊緣玻璃感）*/}
         <Group clip={CLIP_CIRCLE}>
-          {/* 1. 頂部半月形大面積柔和反光 */}
-          <Path path={GLASS_OVAL} opacity={0.65}>
+          {/* 左上內部月牙柔光 */}
+          <Circle cx={CENTER + 1} cy={CENTER + 1} r={RADIUS - 3} color="transparent" style="stroke" strokeWidth={5}>
             <LinearGradient
-              start={vec(CENTER, CENTER - RADIUS)}
-              end={vec(CENTER, CENTER)}
-              colors={['rgba(255,255,255,0.85)', 'rgba(255,255,255,0)']}
+              start={vec(CENTER - RADIUS, CENTER - RADIUS)}
+              end={vec(CENTER + RADIUS * 0.1, CENTER + RADIUS * 0.1)}
+              colors={['rgba(255,255,255,0.75)', 'transparent']}
             />
-          </Path>
-          {/* 2. 鏡面高光柔暈（讓高光點不生硬，更有層次）*/}
-          <Circle cx={CENTER - RADIUS * 0.42} cy={CENTER - RADIUS * 0.42} r={RADIUS * 0.35} opacity={0.6}>
-            <RadialGradient
-              c={vec(CENTER - RADIUS * 0.42, CENTER - RADIUS * 0.42)}
-              r={RADIUS * 0.35}
-              colors={['rgba(255,255,255,0.9)', 'rgba(255,255,255,0)']}
-            />
+            <BlurMask blur={2} style="normal" />
           </Circle>
-          {/* 3. 銳利核心反光點（微柔焦，對齊暗色玻璃球參考圖）*/}
-          <Circle cx={CENTER - RADIUS * 0.48} cy={CENTER - RADIUS * 0.48} r={2.0} color="#ffffff" opacity={0.95}>
-            <BlurMask blur={0.8} style="normal" />
+
+          {/* 銳利核心反光點 */}
+          <Circle cx={CENTER - RADIUS * 0.45} cy={CENTER - RADIUS * 0.45} r={1.5} color="#ffffff" opacity={1.0}>
+            <BlurMask blur={0.5} style="normal" />
           </Circle>
         </Group>
 
-        {/* ══ LAYER 9 ── 玻璃物理厚度與折射 (Thick Glass Lip & Caustics) */}
+        {/* ══ LAYER 9 ── 玻璃物理厚度與折射 */}
         <Group clip={CLIP_CIRCLE}>
-          {/* 1. 頂部拋光銳利邊緣線 (Polished Rim) — 硬質玻璃的關鍵 */}
-          <Circle cx={CENTER} cy={CENTER} r={RADIUS - 1} color="transparent" style="stroke" strokeWidth={1.5} opacity={0.9}>
+          {/* 頂部拋光銳利邊緣線 */}
+          <Circle cx={CENTER} cy={CENTER} r={RADIUS - 0.5} color="transparent" style="stroke" strokeWidth={1.5}>
             <LinearGradient
               start={vec(CENTER - RADIUS, CENTER - RADIUS)}
-              end={vec(CENTER + RADIUS * 0.2, CENTER + RADIUS * 0.2)}
-              colors={['rgba(255,255,255,1)', 'rgba(255,255,255,0)']}
+              end={vec(CENTER + RADIUS * 0.3, CENTER + RADIUS * 0.3)}
+              colors={['rgba(255,255,255,0.95)', 'transparent']}
             />
           </Circle>
-          {/* 2. 底部內反射光 (Caustic Bounce) — 玻璃球底部聚光，厚度感的靈魂 */}
-          <Circle cx={CENTER} cy={CENTER} r={RADIUS - 2.5} color="transparent" style="stroke" strokeWidth={3} opacity={0.45}>
+
+          {/* 底部內反射聚光 */}
+          <Circle cx={CENTER} cy={CENTER} r={RADIUS - 2} color="transparent" style="stroke" strokeWidth={3}>
             <LinearGradient
-              start={vec(CENTER, CENTER - RADIUS * 0.2)}
-              end={vec(CENTER, CENTER + RADIUS)}
-              colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.8)']}
+              start={vec(CENTER, CENTER)}
+              end={vec(CENTER + RADIUS, CENTER + RADIUS)}
+              colors={['transparent', 'rgba(255,255,255,0.5)']}
             />
-            <BlurMask blur={2.5} style="normal" />
+            <BlurMask blur={2} style="normal" />
           </Circle>
-          {/* 3. 最外層深色環境吸收圈（強調球體邊緣輪廓與立體感）*/}
-          <Circle cx={CENTER} cy={CENTER} r={RADIUS - 0.5} color="transparent" style="stroke" strokeWidth={2.0} opacity={0.85}>
+
+          {/* 外圍深色環境吸收圈 */}
+          <Circle cx={CENTER} cy={CENTER} r={RADIUS - 0.5} color="transparent" style="stroke" strokeWidth={2.0}>
             <LinearGradient
               start={vec(CENTER - RADIUS, CENTER - RADIUS)}
               end={vec(CENTER + RADIUS, CENTER + RADIUS)}
-              colors={['rgba(255,255,255,0.3)', 'rgba(0,0,0,0.3)', 'rgba(0,0,0,1)']}
+              colors={['transparent', 'rgba(0,0,0,0.1)', 'rgba(0,0,0,0.85)']}
+              positions={[0, 0.6, 1]}
             />
           </Circle>
         </Group>
