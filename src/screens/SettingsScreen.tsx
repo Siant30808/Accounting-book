@@ -7,11 +7,9 @@ import { Feather } from '@expo/vector-icons';
 import { useBudgetStore } from '../store/useBudgetStore';
 import { colors, radius, spacing, fontSize, shadows, glows, textShadows } from '../theme';
 import { GlassCard } from '../components/GlassCard';
-import { exportExcel, importExcel } from '../utils/excel';
 import { exportBackup, importBackup } from '../utils/backup';
 import { Bill, CATS, getCatIcon } from '../types';
 import { fmt } from '../utils/format';
-import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 
 export function SettingsScreen() {
@@ -61,23 +59,6 @@ export function SettingsScreen() {
       savings:  sv,
     });
     showToast('✅ 設定已儲存');
-  };
-
-  const handleExport = async () => {
-    showToast('⏳ 產生報表中…');
-    const msg = await exportExcel(transactions, settings.payday);
-    showToast(msg);
-  };
-
-  const handleImport = async () => {
-    const result = await DocumentPicker.getDocumentAsync({
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    });
-    if (result.canceled) return;
-    showToast('⏳ 匯入中…');
-    const { imported, transactions: merged } = await importExcel(result.assets[0].uri, transactions);
-    useBudgetStore.getState().importTransactions(merged);
-    showToast(`✅ 匯入完成，新增 ${imported} 筆`);
   };
 
   // ── 完整資料備份 / 還原（含設定、存款、桌布等所有資料）──
@@ -412,19 +393,6 @@ export function SettingsScreen() {
               <Text style={[styles.actionBtnText, { color: colors.savings }]}>還原完整備份</Text>
             </View>
           </Pressable>
-
-          <Pressable style={[styles.actionBtn, styles.actionBtnMint, { marginTop: 10 }]} onPress={handleExport}>
-            <View style={styles.btnInner}>
-              <Feather name="upload-cloud" size={18} color={colors.income} />
-              <Text style={[styles.actionBtnText, { color: colors.income }]}>匯出 Excel 報表</Text>
-            </View>
-          </Pressable>
-          <Pressable style={[styles.actionBtn, styles.actionBtnCyan, { marginTop: 10 }]} onPress={handleImport}>
-            <View style={styles.btnInner}>
-              <Feather name="download-cloud" size={18} color={colors.credit} />
-              <Text style={[styles.actionBtnText, { color: colors.credit }]}>匯入 Excel 備份</Text>
-            </View>
-          </Pressable>
         </GlassCard>
 
         {/* 危險區域 */}
@@ -632,8 +600,6 @@ const styles = StyleSheet.create({
   saveBtnText: { color: colors.income, fontSize: fontSize.xl, fontWeight: '700', ...textShadows.light },
 
   actionBtn:      { padding: spacing.lg, borderRadius: radius.md, alignItems: 'center', borderWidth: 1.5 },
-  actionBtnMint:  { backgroundColor: 'rgba(52,211,153,0.12)', borderColor: 'rgba(52,211,153,0.35)' },
-  actionBtnCyan:  { backgroundColor: 'rgba(56,189,248,0.12)', borderColor: 'rgba(56,189,248,0.35)' },
   actionBtnGhost: { backgroundColor: 'rgba(244,114,182,0.10)', borderColor: 'rgba(244,114,182,0.35)' },
   actionBtnPurple: { backgroundColor: 'rgba(167,139,250,0.12)', borderColor: 'rgba(167,139,250,0.35)' },
   actionBtnText:  { fontSize: fontSize.xl, fontWeight: '700', ...textShadows.light },

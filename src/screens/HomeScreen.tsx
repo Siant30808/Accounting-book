@@ -7,7 +7,6 @@ import {
 import { Image } from 'expo-image';
 import { Feather } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import * as DocumentPicker from 'expo-document-picker';
 import { useBudgetStore }       from '../store/useBudgetStore';
 import { SkiaPieChart, ChartSlice } from '../components/SkiaPieChart';
 import { PieLegend }            from '../components/PieLegend';
@@ -15,7 +14,6 @@ import { FabRobot }             from '../components/FabRobot';
 import { PigSavings }           from '../components/PigSavings';
 import { fmt, dayLabel }        from '../utils/format';
 import { localDateStr, getPeriod } from '../utils/period';
-import { exportExcel, importExcel } from '../utils/excel';
 import { BillReminderModal } from '../components/BillReminderModal';
 import { Transaction, Bill, CATS, getCatIcon } from '../types';
 import { colors, radius, spacing, fontSize, shadows, glows, textShadows } from '../theme';
@@ -71,7 +69,7 @@ function NeuCard({ children, glowColor = 'rgba(255,255,255,0.02)', glow, colorTo
 export function HomeScreen() {
   const {
     transactions, settings, bgSettings,
-    addTransaction, deleteTransaction, importTransactions,
+    addTransaction, deleteTransaction,
     checkPeriodRollover, getCurrentPeriod, getPeriodTxs,
   } = useBudgetStore();
 
@@ -178,23 +176,6 @@ export function HomeScreen() {
     setAddAmt(''); setAddNote('');
     showToast(`✅ ${addType === 'expense' ? (addPay === '信用卡' ? '💳 刷卡' : '💵 現金') + '記帳' : '💵 收入'}成功`);
   }, [addAmt, addType, addCat, selectedDate, addPay, addNote]);
-
-  const handleExport = useCallback(async () => {
-    showToast('⏳ 產生報表中…');
-    const msg = await exportExcel(transactions, settings.payday);
-    showToast(msg);
-  }, [transactions, settings.payday]);
-
-  const handleImport = useCallback(async () => {
-    const result = await DocumentPicker.getDocumentAsync({
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    });
-    if (result.canceled) return;
-    showToast('⏳ 匯入中…');
-    const { imported, transactions: merged } = await importExcel(result.assets[0].uri, transactions);
-    importTransactions(merged);
-    showToast(`✅ 匯入完成，新增 ${imported} 筆`);
-  }, [transactions]);
 
   // 明細群組
   const groupedEntries = useMemo(() => {
