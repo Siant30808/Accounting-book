@@ -19,10 +19,19 @@ export function SettingsScreen() {
     addBill, updateBill, deleteBill, markBillPaid, unmarkBillPaid, getCurrentPeriod,
   } = useBudgetStore();
 
-  const [name,    setName]    = useState(settings.username);
-  const [payday,  setPayday]  = useState(String(settings.payday));
-  const [budget,  setBudget]  = useState(String(settings.budget));
-  const [savings, setSavings] = useState(String(settings.savings));
+  const [name,           setName]           = useState(settings.username);
+  const [payday,         setPayday]         = useState(String(settings.payday));
+  const [savings,        setSavings]        = useState(String(settings.savings));
+  const [mealPeriodBgt,  setMealPeriodBgt]  = useState(String(settings.mealPeriodBudget));
+  const [bgtGrocery,     setBgtGrocery]     = useState(String(settings.monthlyCategoryBudgets['食材採購']));
+  const [bgtDaily,       setBgtDaily]       = useState(String(settings.monthlyCategoryBudgets['日用品']));
+  const [bgtFun,         setBgtFun]         = useState(String(settings.monthlyCategoryBudgets['娛樂']));
+
+  // 本期天數（用於計算每日餐費建議）
+  const currentPeriod = getCurrentPeriod();
+  const cycleDays = Math.max(1, Math.round(
+    (new Date(currentPeriod.endStr).getTime() - new Date(currentPeriod.startStr).getTime()) / 86400000,
+  ) + 1);
   const [toast,   setToast]   = useState('');
   const [showClearConfirm, setShowClearConfirm] = useState(false);
 
@@ -33,14 +42,17 @@ export function SettingsScreen() {
   const [billAmount,     setBillAmount]     = useState('');
   const [billDueDay,     setBillDueDay]     = useState('1');
   const [billCat,        setBillCat]        = useState<Bill['cat']>('其他');
-  const [billAutoDeduct, setBillAutoDeduct] = useState(false);
+  const [billPaymentMode, setBillPaymentMode] = useState<'manual' | 'auto'>('manual');
   const [confirmUnmarkBillId, setConfirmUnmarkBillId] = useState<number | null>(null);
 
   useEffect(() => {
     setName(settings.username);
     setPayday(String(settings.payday));
-    setBudget(String(settings.budget));
     setSavings(String(settings.savings));
+    setMealPeriodBgt(String(settings.mealPeriodBudget));
+    setBgtGrocery(String(settings.monthlyCategoryBudgets['食材採購']));
+    setBgtDaily(String(settings.monthlyCategoryBudgets['日用品']));
+    setBgtFun(String(settings.monthlyCategoryBudgets['娛樂']));
   }, [settings]);
 
   const showToast = (msg: string) => {
@@ -50,13 +62,17 @@ export function SettingsScreen() {
 
   const handleSave = () => {
     const pd = Math.min(28, Math.max(1, parseInt(payday) || 5));
-    const bg = parseInt(budget) || 15000;
     const sv = parseFloat(savings) || 0;
     saveSettings({
-      username: name.trim() || '我',
-      payday:   pd,
-      budget:   bg,
-      savings:  sv,
+      username:         name.trim() || '我',
+      payday:           pd,
+      savings:          sv,
+      mealPeriodBudget: parseInt(mealPeriodBgt) || 9000,
+      monthlyCategoryBudgets: {
+        食材採購: parseInt(bgtGrocery) || 6000,
+        日用品:   parseInt(bgtDaily)   || 2000,
+        娛樂:     parseInt(bgtFun)     || 3000,
+      },
     });
     showToast('✅ 設定已儲存');
   };
@@ -104,10 +120,16 @@ export function SettingsScreen() {
   };
 
   // ── 固定帳單管理 ──
+  const guessBillCat = (name: string): Bill['cat'] => {
+    if (/車貸|貸款|分期|信貸|房貸/.test(name)) return '貸款';
+    if (/0050|ETF|定期定額|股票|投資|基金/.test(name)) return '投資';
+    return '其他必要支出';
+  };
+
   const openAddBillModal = () => {
     setEditingBillId(null);
     setBillName(''); setBillAmount(''); setBillDueDay('1');
-    setBillCat('其他'); setBillAutoDeduct(false);
+    setBillCat('其他必要支出'); setBillPaymentMode('manual');
     setShowBillModal(true);
   };
 
@@ -117,7 +139,7 @@ export function SettingsScreen() {
     setBillAmount(String(bill.amount));
     setBillDueDay(String(bill.dueDay));
     setBillCat(bill.cat);
-    setBillAutoDeduct(bill.autoDeduct);
+    setBillPaymentMode(bill.paymentMode ?? (bill.autoDeduct ? 'auto' : 'manual'));
     setShowBillModal(true);
   };
 
@@ -127,11 +149,12 @@ export function SettingsScreen() {
     if (!billName.trim()) { showToast('❌ 請輸入帳單名稱'); return; }
     if (!amount || amount <= 0) { showToast('❌ 請輸入有效金額'); return; }
 
+    const isAuto = billPaymentMode === 'auto';
     if (editingBillId !== null) {
-      updateBill(editingBillId, { name: billName.trim(), amount, dueDay, cat: billCat, autoDeduct: billAutoDeduct });
+      updateBill(editingBillId, { name: billName.trim(), amount, dueDay, cat: billCat, paymentMode: billPaymentMode, autoDeduct: isAuto });
       showToast('✅ 帳單已更新');
     } else {
-      addBill({ name: billName.trim(), amount, dueDay, cat: billCat, autoDeduct: billAutoDeduct });
+      addBill({ name: billName.trim(), amount, dueDay, cat: billCat, paymentMode: billPaymentMode, autoDeduct: isAuto });
       showToast('✅ 已新增帳單');
     }
     setShowBillModal(false);
@@ -201,18 +224,55 @@ export function SettingsScreen() {
               keyboardType="numeric"
             />
           </View>
+          {/* ── 本期餐費預算 */}
           <View style={[styles.row, styles.rowBorder]}>
-            <Feather name="target" size={20} color="#64748B" style={styles.rowIcon} />
+            <Feather name="coffee" size={20} color="#64748B" style={styles.rowIcon} />
             <View style={styles.rowInfo}>
-              <Text style={styles.rowLabel}>每期預算</Text>
-              <Text style={styles.rowSub}>NT$</Text>
+              <Text style={styles.rowLabel}>本期餐費預算</Text>
+              <Text style={styles.rowSub}>
+                每日約 NT${Math.round((parseInt(mealPeriodBgt) || 9000) / cycleDays).toLocaleString('zh-TW')}（本期 {cycleDays} 天）
+              </Text>
             </View>
             <TextInput
               style={styles.input}
-              value={budget}
-              onChangeText={setBudget}
+              value={mealPeriodBgt}
+              onChangeText={setMealPeriodBgt}
               keyboardType="numeric"
             />
+          </View>
+
+          {/* ── 每月生活預算 */}
+          <View style={[styles.row, styles.rowBorder]}>
+            <Feather name="grid" size={20} color="#64748B" style={styles.rowIcon} />
+            <View style={styles.rowInfo}>
+              <Text style={styles.rowLabel}>每月生活預算</Text>
+              <Text style={styles.rowSub}>食材採購 ／ 日用品 ／ 娛樂</Text>
+            </View>
+          </View>
+          {([
+            { label: '🥬 食材採購', val: bgtGrocery, set: setBgtGrocery },
+            { label: '🧺 日用品',   val: bgtDaily,   set: setBgtDaily   },
+            { label: '🎮 娛樂',     val: bgtFun,     set: setBgtFun     },
+          ] as const).map(item => (
+            <View key={item.label} style={styles.budgetSubRow}>
+              <Text style={styles.budgetSubLabel}>{item.label}</Text>
+              <TextInput
+                style={styles.input}
+                value={item.val}
+                onChangeText={item.set}
+                keyboardType="numeric"
+              />
+            </View>
+          ))}
+          <View style={styles.budgetTotalRow}>
+            <Text style={styles.budgetTotalLabel}>生活預算合計</Text>
+            <Text style={styles.budgetTotalValue}>
+              NT${(
+                (parseInt(bgtGrocery) || 0) +
+                (parseInt(bgtDaily)   || 0) +
+                (parseInt(bgtFun)     || 0)
+              ).toLocaleString('zh-TW')}
+            </Text>
           </View>
           <Pressable style={styles.saveBtn} onPress={handleSave}>
             <View style={styles.btnInner}>
@@ -259,7 +319,7 @@ export function SettingsScreen() {
                   <View style={styles.rowInfo}>
                     <Text style={[styles.rowLabel, paid && styles.billPaidDim]}>{bill.name}</Text>
                     <Text style={[styles.rowSub, paid && styles.billPaidDim]}>
-                      每月 {bill.dueDay} 日 · {fmt(bill.amount)}{bill.autoDeduct ? ' · 自動扣繳' : ''}
+                      每月 {bill.dueDay} 日 · {fmt(bill.amount)}{(bill.paymentMode ?? (bill.autoDeduct ? 'auto' : 'manual')) === 'auto' ? ' · 自動扣繳' : ' · 手動繳費'}
                     </Text>
                   </View>
                   <Switch
@@ -453,7 +513,11 @@ export function SettingsScreen() {
               placeholder="帳單名稱（例如：房租）"
               placeholderTextColor="#94A3B8"
               value={billName}
-              onChangeText={setBillName}
+              onChangeText={name => {
+                setBillName(name);
+                // 新增時才自動推斷分類
+                if (editingBillId === null) setBillCat(guessBillCat(name));
+              }}
             />
             <View style={styles.billRow2}>
               <TextInput
@@ -488,18 +552,18 @@ export function SettingsScreen() {
               ))}
             </ScrollView>
 
-            {/* 自動扣繳切換 */}
+            {/* 付款方式 */}
             <View style={styles.textModeRow}>
-              {([false, true] as const).map(v => {
-                const active = billAutoDeduct === v;
+              {(['manual', 'auto'] as const).map(mode => {
+                const active = billPaymentMode === mode;
                 return (
                   <Pressable
-                    key={String(v)}
+                    key={mode}
                     style={[styles.textModeBtn, active && styles.textModeBtnActive]}
-                    onPress={() => setBillAutoDeduct(v)}
+                    onPress={() => setBillPaymentMode(mode)}
                   >
                     <Text style={[styles.textModeBtnText, active && styles.textModeBtnTextActive]}>
-                      {v ? '自動扣繳' : '手動繳費'}
+                      {mode === 'auto' ? '🔄 自動扣繳' : '✋ 手動繳費'}
                     </Text>
                   </Pressable>
                 );
@@ -675,6 +739,44 @@ const styles = StyleSheet.create({
   textModeBtnActive:     { backgroundColor: 'rgba(55,71,79,0.85)', borderColor: 'rgba(55,71,79,0.6)' },
   textModeBtnText:       { fontSize: fontSize.md, fontWeight: '600', color: colors.textSecondary },
   textModeBtnTextActive: { color: colors.textWhite },
+
+  budgetSubRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing.xs,
+    paddingLeft: 52,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(0,0,0,0.06)',
+  },
+  budgetSubLabel: {
+    fontSize: fontSize.lg,
+    fontWeight: '500',
+    color: colors.textPrimary,
+    flex: 1,
+  },
+  budgetTotalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing.sm,
+    paddingLeft: 52,
+    paddingRight: 4,
+    marginTop: 2,
+    borderTopWidth: 1.5,
+    borderTopColor: 'rgba(0,0,0,0.10)',
+  },
+  budgetTotalLabel: {
+    fontSize: fontSize.lg,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+  budgetTotalValue: {
+    fontSize: fontSize.lg,
+    fontWeight: '700',
+    color: colors.savings,
+    fontFamily: 'monospace',
+  },
 
   toast: {
     position: 'absolute', bottom: 90, alignSelf: 'center',

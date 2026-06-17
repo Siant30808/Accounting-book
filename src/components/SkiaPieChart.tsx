@@ -71,8 +71,8 @@ function buildPaths(
 export function SkiaPieChart({ slices, size = 160 }: SkiaPieChartProps) {
   const cx      = size / 2;
   const cy      = size / 2;
-  const r       = size * 0.38;
-  const strokeW = size * 0.12;
+  const r       = size * 0.39;
+  const strokeW = size * 0.105;
   const GAP     = 8;
 
   const total = useMemo(() => slices.reduce((s, sl) => s + sl.amount, 0), [slices]);
@@ -112,11 +112,11 @@ export function SkiaPieChart({ slices, size = 160 }: SkiaPieChartProps) {
 
           {/* ═════ Layer 0：玻璃溝槽底座 ═════ */}
           {/* 最底層：深色投影，塑造凹槽深度 */}
-          <Circle cx={cx} cy={cy} r={r} color="rgba(0,0,0,0.15)" style="stroke" strokeWidth={strokeW} />
+          <Circle cx={cx} cy={cy} r={r} color="rgba(0,0,0,0.08)" style="stroke" strokeWidth={strokeW} />
           {/* 中間層：白霧，玻璃材質感 */}
-          <Circle cx={cx} cy={cy} r={r} color="rgba(255,255,255,0.40)" style="stroke" strokeWidth={strokeW} />
+          <Circle cx={cx} cy={cy} r={r} color="rgba(255,255,255,0.34)" style="stroke" strokeWidth={strokeW} />
           {/* 頂層：內陰影，凹槽立體感靈魂 */}
-          <Circle cx={cx} cy={cy} r={r} color="rgba(0,0,0,0.20)" style="stroke" strokeWidth={strokeW}>
+          <Circle cx={cx} cy={cy} r={r} color="rgba(0,0,0,0.12)" style="stroke" strokeWidth={strokeW}>
             <BlurMask blur={3} style="inner" />
           </Circle>
 
@@ -130,9 +130,9 @@ export function SkiaPieChart({ slices, size = 160 }: SkiaPieChartProps) {
                 style="stroke"
                 strokeWidth={strokeW}
                 strokeCap="round"
-                opacity={0.3}
+                opacity={0.18}
               >
-                <BlurMask blur={8} style="normal" />
+                <BlurMask blur={5} style="normal" />
               </Path>
               {/* 果凍本體（提升 opacity 確保飽和度）*/}
               <Path
@@ -141,18 +141,18 @@ export function SkiaPieChart({ slices, size = 160 }: SkiaPieChartProps) {
                 style="stroke"
                 strokeWidth={strokeW}
                 strokeCap="round"
-                opacity={0.9}
+                opacity={0.83}
               />
               {/* 頂部高光 Glaze — 微上偏模擬凸面玻璃反光 */}
               <Path
                 path={sl.d}
-                color="rgba(255,255,255,0.70)"
+                color="rgba(255,255,255,0.48)"
                 style="stroke"
-                strokeWidth={strokeW * 0.4}
+                strokeWidth={strokeW * 0.28}
                 strokeCap="round"
-                transform={[{ translateY: -strokeW * 0.1 }]}
+                transform={[{ translateY: -strokeW * 0.12 }]}
               >
-                <BlurMask blur={1.5} style="normal" />
+                <BlurMask blur={2} style="normal" />
               </Path>
             </Group>
           ))}
@@ -187,21 +187,21 @@ const styles = StyleSheet.create({
   amountText: {
     color:            '#FFFFFF',
     fontSize:         22,
-    fontWeight:       '800',
-    letterSpacing:    0.5,
-    textShadowColor:  'rgba(0,0,0,0.55)',
+    fontWeight:       '700',
+    letterSpacing:    0.2,
+    textShadowColor:  'rgba(30,41,59,0.28)',
     textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
+    textShadowRadius: 3,
   },
   currencyText: {
     color:            'rgba(255,255,255,0.75)',
-    fontSize:         11,
-    fontWeight:       '700',
+    fontSize:         10,
+    fontWeight:       '600',
     marginTop:        2,
-    letterSpacing:    1,
-    textShadowColor:  'rgba(0,0,0,0.4)',
+    letterSpacing:    0.8,
+    textShadowColor:  'rgba(30,41,59,0.22)',
     textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
+    textShadowRadius: 2,
   },
   emptyText: {
     color:            'rgba(255,255,255,0.6)',

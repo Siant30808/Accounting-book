@@ -10,14 +10,18 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { useBudgetStore }       from '../store/useBudgetStore';
 import { SkiaPieChart, ChartSlice } from '../components/SkiaPieChart';
 import { PieLegend }            from '../components/PieLegend';
-import { FabRobot }             from '../components/FabRobot';
+import { RobotAssistant, BubbleAlert, RobotFinanceSummary } from '../components/RobotAssistant';
 import { PigSavings }           from '../components/PigSavings';
 import { fmt, dayLabel }        from '../utils/format';
-import { localDateStr, getPeriod } from '../utils/period';
+import { localDateStr, getPeriod, getDueDateInPeriod } from '../utils/period';
 import { BillReminderModal } from '../components/BillReminderModal';
-import { Transaction, Bill, CATS, getCatIcon } from '../types';
+import {
+  Transaction, Bill, StockHolding,
+  CATS, CAT_GROUPS, getCatIcon, getCatHint, normalizeCategory, getBillPaymentMode, periodKey,
+} from '../types';
 import { colors, radius, spacing, fontSize, shadows, glows, textShadows } from '../theme';
 import { GlassCard } from '../components/GlassCard';
+import { fetchStockPrice, StockPriceFetchError } from '../services/stockPriceService';
 
 const kkleBwaGif = require('../../assets/KkleBWA.gif');
 
@@ -26,7 +30,10 @@ const CARD_COLORS = ['#2196F3','#00BCD4','#3F51B5','#00E5FF','#1976D2','#40C4FF'
 
 function buildSlices(txs: Transaction[], colors: string[]): ChartSlice[] {
   const map: Record<string, number> = {};
-  txs.forEach(t => { map[t.cat] = (map[t.cat] ?? 0) + t.amount; });
+  txs.forEach(t => {
+    const norm = normalizeCategory(t.cat);
+    map[norm] = (map[norm] ?? 0) + t.amount;
+  });
   return Object.entries(map).map(([label, amount], i) => ({
     label, amount, color: colors[i % colors.length],
   }));
@@ -68,28 +75,37 @@ function NeuCard({ children, glowColor = 'rgba(255,255,255,0.02)', glow, colorTo
 
 export function HomeScreen() {
   const {
-    transactions, settings, bgSettings,
+    transactions, settings, bgSettings, stockHoldings, bills,
     addTransaction, deleteTransaction,
+    addStockHolding, updateStockHolding, deleteStockHolding,
     checkPeriodRollover, getCurrentPeriod, getPeriodTxs,
   } = useBudgetStore();
 
   const period = useMemo(() => getCurrentPeriod(), [transactions, settings.payday]);
   const txs    = useMemo(() => getPeriodTxs(period), [period, transactions]);
 
+  // 本期生活預算（食材採購 + 日用品 + 娛樂）
+  const lifeBudgetTotal = useMemo(() =>
+    settings.monthlyCategoryBudgets['食材採購'] +
+    settings.monthlyCategoryBudgets['日用品'] +
+    settings.monthlyCategoryBudgets['娛樂'],
+  [settings.monthlyCategoryBudgets]);
+
   const { income, cashExp, cardExp, balance, totalSav, budgetPct } = useMemo(() => {
     const income  = txs.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
     const cashExp = txs.filter(t => t.type === 'expense' && t.pay === '現金').reduce((s, t) => s + t.amount, 0);
     const cardExp = txs.filter(t => t.type === 'expense' && t.pay === '信用卡').reduce((s, t) => s + t.amount, 0);
     const balance = income - cashExp;
+    const totalBudget = (settings.mealPeriodBudget || 9000) + lifeBudgetTotal;
     return {
       income,
       cashExp,
       cardExp,
       balance,
       totalSav:  settings.savings + balance,
-      budgetPct: Math.min(100, Math.round((cashExp / (settings.budget || 1)) * 100)),
+      budgetPct: Math.min(100, Math.round((cashExp / (totalBudget || 1)) * 100)),
     };
-  }, [txs, settings.savings, settings.budget]);
+  }, [txs, settings.savings, settings.mealPeriodBudget, lifeBudgetTotal]);
 
   // 上期結餘
   const prevBal = useMemo(() => {
@@ -120,13 +136,89 @@ export function HomeScreen() {
     [txs],
   );
 
+  // ── 今日餐費 ──
+  const todayStr = useMemo(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  }, [today]);
+
+  const todayMealExp = useMemo(() =>
+    transactions
+      .filter(t => t.date === todayStr && t.type === 'expense' && normalizeCategory(t.cat) === '餐費')
+      .reduce((s, t) => s + t.amount, 0),
+  [transactions, todayStr]);
+
+  const LIFE_CATS = ['食材採購', '日用品', '娛樂'] as const;
+  // ── 本期生活預算（食材採購 + 日用品 + 娛樂）──
+  const lifeExp = useMemo(() => {
+    const base = { '食材採購': 0, '日用品': 0, '娛樂': 0 };
+    txs.filter(t => t.type === 'expense').forEach(t => {
+      const n = normalizeCategory(t.cat) as keyof typeof base;
+      if (n in base) base[n] += t.amount;
+    });
+    return base;
+  }, [txs]);
+  const totalLifeExp = lifeExp['食材採購'] + lifeExp['日用品'] + lifeExp['娛樂'];
+
+  // ── 本期餐費花費 ──
+  const periodMealExp = useMemo(() =>
+    txs.filter(t => t.type === 'expense' && normalizeCategory(t.cat) === '餐費')
+       .reduce((s, t) => s + t.amount, 0),
+  [txs]);
+
+  // ── 即將到期帳單（3 天內，手動未繳才提醒；自動扣繳不提醒）──
+  const upcomingRecurring = useMemo(() => {
+    const todayMs = today.getTime();
+    const pKey    = periodKey(period.startStr);
+    return bills
+      .filter(b => {
+        if (getBillPaymentMode(b) !== 'manual') return false;
+        // 本期已繳（lastPaidPeriodKey 或 paidPeriods 任一標記）→ 不提醒
+        return b.lastPaidPeriodKey !== pKey && !b.paidPeriods.includes(period.startStr);
+      })
+      .map(b => {
+        const due       = getDueDateInPeriod(b.dueDay, period);
+        const daysUntil = Math.round((due.getTime() - todayMs) / 86400000);
+        return { name: b.name, amount: b.amount, category: b.cat, daysUntil, paymentMode: getBillPaymentMode(b) as 'manual' | 'auto' };
+      })
+      .filter(b => b.daysUntil >= -7 && b.daysUntil <= 3)  // 包含逾期 7 天內
+      .sort((a, b) => a.daysUntil - b.daysUntil);
+  }, [bills, period, today]);
+
+  // ── 傳給 RobotAssistant 的財務摘要 ──
+  const financeSummary = useMemo((): RobotFinanceSummary => {
+    const mealDailyAllowance  = Math.round((settings.mealPeriodBudget || 9000) / (totalDays || 1));
+    const mealPeriodBudget    = settings.mealPeriodBudget || 9000;
+    const mealPeriodRemaining = Math.max(0, mealPeriodBudget - periodMealExp);
+    const mealRemainingDailyAvg = daysLeft > 0 ? mealPeriodRemaining / daysLeft : 0;
+    return {
+      todayMealSpent:      todayMealExp,
+      todayMealAllowance:  mealDailyAllowance,
+      mealPeriodSpent:     periodMealExp,
+      mealPeriodBudget,
+      mealPeriodRemaining,
+      mealRemainingDailyAvg,
+      mealDailyAverage:    mealRemainingDailyAvg,
+      daysLeft,
+      lifeBudgetSpent:     totalLifeExp,
+      lifeBudgetTotal:     lifeBudgetTotal,
+      categoryBudgets:     LIFE_CATS.map(name => {
+        const budget = settings.monthlyCategoryBudgets[name] || 1;
+        const spent  = lifeExp[name];
+        return { name, spent, budget, pct: Math.min(999, Math.round((spent / budget) * 100)) };
+      }),
+      upcomingRecurring,
+    };
+  }, [todayMealExp, periodMealExp, settings.mealPeriodBudget, settings.monthlyCategoryBudgets,
+      totalDays, daysLeft, lifeExp, totalLifeExp, lifeBudgetTotal, upcomingRecurring]);
+
   // ── Modal 狀態 ──
   const [showAddModal,     setShowAddModal]     = useState(false);
   const [showSavingsModal, setShowSavingsModal] = useState(false);
   const [deleteTargetId,   setDeleteTargetId]   = useState<number | null>(null);
   const [addType,      setAddType]      = useState<'expense' | 'income'>('expense');
   const [addPay,       setAddPay]       = useState<'現金' | '信用卡'>('現金');
-  const [addCat,       setAddCat]       = useState('餐飲');
+  const [addCat,       setAddCat]       = useState('餐費');
   const [addAmt,       setAddAmt]       = useState('');
   const [addNote,      setAddNote]      = useState('');
   const [selectedDate, setSelectedDate] = useState(new Date());
@@ -134,6 +226,21 @@ export function HomeScreen() {
   const [savingsInput, setSavingsInput] = useState('');
   const [toast,    setToast]    = useState('');
   const [reminderBills, setReminderBills] = useState<Bill[] | null>(null);
+
+  // ── 投資 Modal 狀態 ──
+  const [showInvestmentModal, setShowInvestmentModal] = useState(false);
+  const [investmentView, setInvestmentView] = useState<'list' | 'form'>('list');
+  const [editingStockId,     setEditingStockId]     = useState<number | null>(null);
+  const [stockSymbol,        setStockSymbol]        = useState('');
+  const [stockName,          setStockName]          = useState('');
+  const [stockShares,        setStockShares]        = useState('');
+  const [stockInvestedAmt,   setStockInvestedAmt]   = useState('');
+  const [stockCurrentPrice,  setStockCurrentPrice]  = useState('');
+  const [stockCurrency,      setStockCurrency]      = useState<'TWD' | 'USD'>('TWD');
+  const [stockMarket,        setStockMarket]        = useState<'TW' | 'US'>('TW');
+  const [isFetchingPrice,    setIsFetchingPrice]    = useState(false);
+  const [deleteStockTargetId, setDeleteStockTargetId] = useState<number | null>(null);
+  const [mealAlert, setMealAlert] = useState<BubbleAlert | null>(null);
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showToast  = useCallback((msg: string) => {
@@ -153,7 +260,7 @@ export function HomeScreen() {
     setAddType(type); setAddPay('現金');
     setSelectedDate(new Date());
     setAddAmt(''); setAddNote('');
-    setAddCat(type === 'expense' ? '餐飲' : '薪資');
+    setAddCat(type === 'expense' ? '餐費' : '薪資');
     setShowAddModal(true);
   }, []);
 
@@ -175,7 +282,125 @@ export function HomeScreen() {
     setShowAddModal(false);
     setAddAmt(''); setAddNote('');
     showToast(`✅ ${addType === 'expense' ? (addPay === '信用卡' ? '💳 刷卡' : '💵 現金') + '記帳' : '💵 收入'}成功`);
-  }, [addAmt, addType, addCat, selectedDate, addPay, addNote]);
+
+    // ── 大額餐費提醒 ──
+    if (addType === 'expense' && normalizeCategory(addCat) === '餐費' && amount > 0) {
+      const monthlyMealBudget   = settings.mealPeriodBudget || 9000;
+      const currentMealSpent    = txs
+        .filter(t => t.type === 'expense' && normalizeCategory(t.cat) === '餐費')
+        .reduce((s, t) => s + t.amount, 0);
+      const mealSpentThisCycle  = currentMealSpent + amount;
+      const remainingMealBudget = Math.max(0, monthlyMealBudget - mealSpentThisCycle);
+      const mealImpactRate      = amount / (monthlyMealBudget || 1);
+      const baseDailyMealBudget = monthlyMealBudget / (totalDays || 1);
+      const remainingDailyAvg   = daysLeft > 0 ? remainingMealBudget / daysLeft : 0;
+      const isLargeMeal         = amount >= baseDailyMealBudget * 2 || mealImpactRate >= 0.1;
+
+      if (isLargeMeal) {
+        const pct    = (mealImpactRate * 100).toFixed(1);
+        const remFmt = `NT$${Math.round(remainingMealBudget).toLocaleString('zh-TW')}`;
+        const avgFmt = `NT$${Math.round(remainingDailyAvg).toLocaleString('zh-TW')}`;
+
+        let message: string;
+        let tone: BubbleAlert['tone'];
+        if (remainingDailyAvg >= baseDailyMealBudget * 0.8) {
+          message = `這餐比較豐盛，不過還很安全，後面幾天稍微穩一點就好。`;
+          tone    = 'info';
+        } else if (remainingDailyAvg >= baseDailyMealBudget * 0.5) {
+          message = `這餐用了本期餐費的 ${pct}%，聚餐偶爾會發生，接下來幾天稍微收一收就好。`;
+          tone    = 'warning';
+        } else {
+          message = `這餐花了不少，剩餘日均只剩 ${avgFmt}，接下來要收斂一點。`;
+          tone    = 'danger';
+        }
+
+        const alert: BubbleAlert = {
+          title:   '🍜 餐費提醒',
+          message,
+          tone,
+          stats: [
+            { label: '這餐佔比',   value: `${pct}%` },
+            { label: '本月剩餘',   value: remFmt },
+            { label: '每日平均',   value: avgFmt },
+          ],
+        };
+        setTimeout(() => setMealAlert(alert), 400);
+      }
+    }
+  }, [addAmt, addType, addCat, selectedDate, addPay, addNote, settings.mealPeriodBudget, totalDays, daysLeft, txs]);
+
+  // ── 投資摘要 ──
+  const investmentSummary = useMemo(() => {
+    const totalInvested    = stockHoldings.reduce((s, h) => s + h.investedAmount, 0);
+    const totalMarketValue = stockHoldings.reduce((s, h) => s + h.shares * h.currentPrice, 0);
+    const unrealizedProfit = totalMarketValue - totalInvested;
+    const returnRate       = totalInvested > 0 ? unrealizedProfit / totalInvested : 0;
+    return { totalInvested, totalMarketValue, unrealizedProfit, returnRate };
+  }, [stockHoldings]);
+
+  // ── 投資表單操作 ──
+  const resetStockForm = useCallback(() => {
+    setEditingStockId(null);
+    setStockSymbol('');
+    setStockName('');
+    setStockShares('');
+    setStockInvestedAmt('');
+    setStockCurrentPrice('');
+    setStockCurrency('TWD');
+    setStockMarket('TW');
+  }, []);
+
+  const startEditStock = useCallback((s: StockHolding) => {
+    setEditingStockId(s.id);
+    setStockSymbol(s.symbol);
+    setStockName(s.name);
+    setStockShares(String(s.shares));
+    setStockInvestedAmt(String(s.investedAmount));
+    setStockCurrentPrice(String(s.currentPrice));
+    setStockCurrency(s.currency);
+    setStockMarket(s.market);
+    setInvestmentView('form');
+  }, []);
+
+  const handleFetchPrice = useCallback(async () => {
+    if (!stockSymbol.trim()) { showToast('❌ 請先輸入股票代號'); return; }
+    setIsFetchingPrice(true);
+    try {
+      const result = await fetchStockPrice({ symbol: stockSymbol.trim(), market: stockMarket });
+      setStockCurrentPrice(String(result.price));
+      showToast('✅ 現價已更新');
+    } catch (e) {
+      const msg = e instanceof StockPriceFetchError ? e.message : '抓取失敗';
+      showToast(`⚠️ ${msg}，請手動輸入現價`);
+    } finally {
+      setIsFetchingPrice(false);
+    }
+  }, [stockSymbol, stockMarket]);
+
+  const handleSaveStock = useCallback(() => {
+    const shares         = parseFloat(stockShares);
+    const investedAmount = parseFloat(stockInvestedAmt);
+    const currentPrice   = parseFloat(stockCurrentPrice);
+    if (!stockSymbol.trim())              { showToast('❌ 請輸入股票代號'); return; }
+    if (!stockName.trim())                { showToast('❌ 請輸入股票名稱'); return; }
+    if (!shares || shares <= 0)           { showToast('❌ 請輸入有效股數'); return; }
+    if (!investedAmount || investedAmount <= 0) { showToast('❌ 請輸入有效投入金額'); return; }
+    if (!currentPrice || currentPrice <= 0)     { showToast('❌ 請輸入有效目前價格'); return; }
+    const payload = {
+      symbol: stockSymbol.trim(), name: stockName.trim(),
+      shares, investedAmount, currentPrice,
+      currency: stockCurrency, market: stockMarket,
+    };
+    if (editingStockId !== null) {
+      updateStockHolding(editingStockId, payload);
+      showToast('✅ 持股已更新');
+    } else {
+      addStockHolding(payload);
+      showToast('✅ 持股已新增');
+    }
+    resetStockForm();
+    setInvestmentView('list');
+  }, [stockSymbol, stockName, stockShares, stockInvestedAmt, stockCurrentPrice, stockCurrency, stockMarket, editingStockId]);
 
   // 明細群組
   const groupedEntries = useMemo(() => {
@@ -203,16 +428,16 @@ export function HomeScreen() {
 
   // ── 動態玻璃厚度：有背景圖時加厚白霧，強化文字可讀性 ──
   const hasBg           = !!bgSettings.fileUri;
-  const dynamicGlassTop = hasBg ? 'rgba(255,255,255,0.65)' : 'rgba(255,255,255,0.40)';
+  const dynamicGlassTop = hasBg ? 'rgba(255,255,255,0.78)' : 'rgba(255,255,255,0.40)';
 
   // ── 文字顏色 & 陰影（依 textMode 切換）──
   const isLight = bgSettings.textMode === 'light';
   // 淺色文字模式（背景深）→ 白色光暈陰影；深色文字模式 → 黑色投影
   const dynShadow = isLight ? textShadows.lightOnDark : textShadows.light;
   const dynShadowHeavy = isLight ? textShadows.lightOnDark : textShadows.heavy;
-  const dynPrimary   = isLight ? '#FFFFFF'               : colors.textPrimary;
-  const dynSecondary = isLight ? 'rgba(255,255,255,0.85)' : colors.textSecondary;
-  const dynMuted     = isLight ? 'rgba(255,255,255,0.65)' : colors.textMuted;
+  const dynPrimary   = hasBg ? '#1E293B'                : isLight ? '#FFFFFF'                : colors.textPrimary;
+  const dynSecondary = hasBg ? 'rgba(51,65,85,0.86)'   : isLight ? 'rgba(255,255,255,0.85)' : colors.textSecondary;
+  const dynMuted     = hasBg ? 'rgba(71,85,105,0.72)'  : isLight ? 'rgba(255,255,255,0.65)' : colors.textMuted;
 
   return (
     <SafeAreaView style={styles.root}>
@@ -223,6 +448,13 @@ export function HomeScreen() {
           style={StyleSheet.absoluteFill}
           resizeMode="cover"
           imageStyle={{ opacity: bgOpacity }}
+        />
+      )}
+      {/* 可讀性遮罩：柔化背景細節，讓玻璃卡片上的文字更清晰 */}
+      {hasBg && (
+        <View
+          pointerEvents="none"
+          style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(226,232,240,0.35)' }]}
         />
       )}
       <StatusBar
@@ -241,13 +473,15 @@ export function HomeScreen() {
         ══════════════════════════════════ */}
         <View style={styles.header}>
           <View style={styles.headerLeft}>
-            <Text style={[styles.headerDate, { color: dynSecondary }, dynShadow]}>{headerDate}</Text>
-            <Text style={[styles.headerGreeting, { color: dynPrimary }, dynShadowHeavy]} numberOfLines={2}>
-              你好，{settings.username}！{greeting}
-            </Text>
-            <View style={styles.periodBadge}>
-              <View style={styles.periodDot} />
-              <Text style={[styles.periodLabel, { color: dynPrimary }, dynShadow]}>本期 {period.label}</Text>
+            <View style={hasBg ? styles.headerTextScrim : undefined}>
+              <Text style={[styles.headerDate, { color: dynSecondary }, dynShadow]}>{headerDate}</Text>
+              <Text style={[styles.headerGreeting, { color: dynPrimary }, dynShadowHeavy]} numberOfLines={2}>
+                你好，{settings.username}！{greeting}
+              </Text>
+              <View style={styles.periodBadge}>
+                <View style={styles.periodDot} />
+                <Text style={[styles.periodLabel, { color: dynPrimary }, dynShadow]}>本期 {period.label}</Text>
+              </View>
             </View>
           </View>
           <Image
@@ -264,7 +498,7 @@ export function HomeScreen() {
         <View style={styles.gridWrapper}>
 
           {/* ── 1. 現金支出 (粉紅光暈) ── */}
-          <NeuCard glow={glows.pinkGlow} glowColor="rgba(244,114,182,0.22)" colorTop={dynamicGlassTop}>
+          <NeuCard glow={glows.pinkGlow} glowColor="rgba(244,114,182,0.13)" colorTop={dynamicGlassTop}>
             <View style={styles.sumIconBox}>
               <Feather name="shopping-bag" size={26} color={colors.expense} />
             </View>
@@ -277,7 +511,7 @@ export function HomeScreen() {
           </NeuCard>
 
           {/* ── 2. 上期結餘 (薄荷綠光暈) ── */}
-          <NeuCard glow={glows.mintGlow} glowColor="rgba(52,211,153,0.22)" colorTop={dynamicGlassTop}>
+          <NeuCard glow={glows.mintGlow} glowColor="rgba(52,211,153,0.13)" colorTop={dynamicGlassTop}>
             <View style={styles.sumIconBox}>
               <Feather name="calendar" size={26} color={colors.income} />
             </View>
@@ -290,7 +524,7 @@ export function HomeScreen() {
           </NeuCard>
 
           {/* ── 3. 信用卡刷卡 (天空藍光暈) ── */}
-          <NeuCard glow={glows.cyanGlow} glowColor="rgba(56,189,248,0.22)" colorTop={dynamicGlassTop}>
+          <NeuCard glow={glows.cyanGlow} glowColor="rgba(56,189,248,0.13)" colorTop={dynamicGlassTop}>
             <View style={styles.sumIconBox}>
               <Feather name="credit-card" size={26} color={colors.credit} />
             </View>
@@ -303,7 +537,7 @@ export function HomeScreen() {
           </NeuCard>
 
           {/* ── 4. 本期結餘 (薰衣草紫光暈) ── */}
-          <NeuCard glow={glows.purpleGlow} glowColor="rgba(167,139,250,0.22)" colorTop={dynamicGlassTop}>
+          <NeuCard glow={glows.purpleGlow} glowColor="rgba(167,139,250,0.13)" colorTop={dynamicGlassTop}>
             <View style={styles.sumIconBox}>
               <Feather name="trending-up" size={26} color={colors.savings} />
             </View>
@@ -348,27 +582,132 @@ export function HomeScreen() {
         </Pressable>
 
         {/* ══════════════════════════════════
-            預算進度條
+            投資資產卡
+        ══════════════════════════════════ */}
+        <Pressable
+          onPress={() => { setInvestmentView('list'); setShowInvestmentModal(true); }}
+          style={styles.investmentCardWrap}
+        >
+          <GlassCard
+            style={styles.investmentCard}
+            colorTop={hasBg ? 'rgba(255,255,255,0.78)' : 'rgba(255,255,255,0.62)'}
+            colorBot={
+              investmentSummary.unrealizedProfit >= 0
+                ? 'rgba(52,211,153,0.16)'
+                : 'rgba(244,114,182,0.16)'
+            }
+
+            borderRadius={radius.xl}
+          >
+            {stockHoldings.length === 0 ? (
+              <View style={styles.investmentEmpty}>
+                <Text style={{ fontSize: 28 }}>📈</Text>
+                <View>
+                  <Text style={[styles.investmentTitle, { color: dynPrimary }]}>投資資產</Text>
+                  <Text style={[styles.investmentEmptyHint, { color: dynMuted }]}>尚未建立持股，點擊新增第一筆</Text>
+                </View>
+              </View>
+            ) : (
+              <View style={styles.investmentTopRow}>
+                <View style={styles.investmentLeft}>
+                  <View style={styles.investmentTitleRow}>
+                    <Text style={styles.investmentIcon}>📈</Text>
+                    <Text style={[styles.investmentTitle, { color: dynSecondary }]}>投資資產</Text>
+                  </View>
+                  <Text style={[styles.investmentAmount, { color: dynPrimary }]} numberOfLines={1} adjustsFontSizeToFit>
+                    NT${Math.round(investmentSummary.totalMarketValue).toLocaleString('zh-TW')}
+                  </Text>
+                  <Text style={[styles.investmentSub, { color: dynMuted }]}>
+                    投入 NT${Math.round(investmentSummary.totalInvested).toLocaleString('zh-TW')}
+                  </Text>
+                </View>
+                <View style={styles.investmentRight}>
+                  <Text style={[styles.investmentProfit, {
+                    color: investmentSummary.unrealizedProfit >= 0 ? colors.income : colors.expense,
+                  }]}>
+                    {investmentSummary.unrealizedProfit >= 0 ? '+' : ''}
+                    NT${Math.round(Math.abs(investmentSummary.unrealizedProfit)).toLocaleString('zh-TW')}
+                  </Text>
+                  <Text style={[styles.investmentRate, {
+                    color: investmentSummary.returnRate >= 0 ? colors.income : colors.expense,
+                  }]}>
+                    {investmentSummary.returnRate >= 0 ? '+' : ''}
+                    {(investmentSummary.returnRate * 100).toFixed(1)}%
+                  </Text>
+                </View>
+              </View>
+            )}
+          </GlassCard>
+        </Pressable>
+
+        {/* ══════════════════════════════════
+            今日餐費
         ══════════════════════════════════ */}
         <Card style={styles.progressCard} colorTop={dynamicGlassTop}>
-          <View style={styles.progressTop}>
-            <Text style={[styles.progressTitle, { color: dynPrimary }]}>本期預算（第 {elapsed}/{totalDays} 天）</Text>
+          {(() => {
+            const mealDailyLimit = Math.round((settings.mealPeriodBudget || 9000) / (totalDays || 1));
+            const remain         = Math.max(0, mealDailyLimit - todayMealExp);
+            const pct            = Math.min(100, Math.round((todayMealExp / (mealDailyLimit || 1)) * 100));
+            const barColor       = pct > 85 ? colors.expense : pct > 60 ? colors.neutral : colors.income;
+            const mealBudget     = settings.mealPeriodBudget || 9000;
+            const periodMealPct  = Math.min(100, Math.round((periodMealExp / mealBudget) * 100));
+            const periodRemaining = Math.max(0, mealBudget - periodMealExp);
+            const periodDailyAvg = daysLeft > 0 ? Math.round(periodRemaining / daysLeft) : 0;
+            return (
+              <>
+                <View style={styles.progressTop}>
+                  <Text style={[styles.progressTitle, { color: dynPrimary }]}>🍽️ 今日餐費</Text>
+                  <Text style={[styles.progressMeta, { color: dynSecondary }]}>{fmt(todayMealExp)} / {fmt(mealDailyLimit)}</Text>
+                </View>
+                <InsetBox style={styles.progressTrack}>
+                  <View style={[styles.progressFill, { width: `${pct}%` as any, backgroundColor: barColor }]} />
+                </InsetBox>
+                <Text style={[styles.progressMeta, { color: remain > 0 ? dynSecondary : colors.expense }]}>
+                  {remain > 0 ? `今日還能吃 NT$${remain.toLocaleString('zh-TW')}` : '今日餐費已達建議上限'}
+                </Text>
+                <View style={[styles.progressBottom, { marginTop: 8 }]}>
+                  <Text style={[styles.progressMeta, { color: dynMuted, fontSize: 12 }]}>
+                    本期餐費 {fmt(periodMealExp)} / {fmt(mealBudget)} · {periodMealPct}%
+                  </Text>
+                  <Text style={[styles.progressMeta, { color: periodMealPct > 85 ? colors.expense : dynMuted, fontSize: 12 }]}>
+                    剩 {fmt(periodRemaining)} · 日均 {fmt(periodDailyAvg)}
+                  </Text>
+                </View>
+              </>
+            );
+          })()}
+        </Card>
+
+        {/* ══════════════════════════════════
+            本期生活預算
+        ══════════════════════════════════ */}
+        <Card style={[styles.progressCard, { marginTop: 0 }]} colorTop={dynamicGlassTop}>
+          <View style={[styles.progressTop, { marginBottom: 12 }]}>
+            <Text style={[styles.progressTitle, { color: dynPrimary }]}>本期生活預算（第 {elapsed}/{totalDays} 天）</Text>
             <Text style={[styles.progressMeta, { color: dynSecondary }]}>剩 {daysLeft} 天</Text>
           </View>
-          <InsetBox style={styles.progressTrack}>
-            <View
-              style={[
-                styles.progressFill,
-                {
-                  width:           `${budgetPct}%` as any,
-                  backgroundColor: budgetPct > 80 ? colors.expense : budgetPct > 60 ? colors.neutral : colors.income,
-                },
-              ]}
-            />
-          </InsetBox>
-          <View style={styles.progressBottom}>
-            <Text style={[styles.progressMeta, { color: dynSecondary }]}>已用 {fmt(cashExp)}</Text>
-            <Text style={[styles.progressMeta, { color: dynSecondary }]}>預算 {fmt(settings.budget)}</Text>
+          {LIFE_CATS.map(cat => {
+            const used      = lifeExp[cat];
+            const catBudget = settings.monthlyCategoryBudgets[cat] || 1;
+            const pct       = Math.min(100, Math.round((used / catBudget) * 100));
+            const barColor  = pct > 85 ? colors.expense : pct > 60 ? colors.neutral : colors.income;
+            return (
+              <View key={cat} style={{ marginBottom: 10 }}>
+                <View style={styles.progressBottom}>
+                  <Text style={[styles.progressMeta, { color: dynSecondary }]}>{cat}</Text>
+                  <Text style={[styles.progressMeta, { color: pct > 85 ? colors.expense : dynSecondary }]}>
+                    {fmt(used)} / {fmt(catBudget)}
+                  </Text>
+                </View>
+                <InsetBox style={[styles.progressTrack, { marginBottom: 0, marginTop: 4 }]}>
+                  <View style={[styles.progressFill, { width: `${pct}%` as any, backgroundColor: barColor }]} />
+                </InsetBox>
+              </View>
+            );
+          })}
+          <View style={[styles.progressBottom, { marginTop: 6 }]}>
+            <Text style={[styles.progressMeta, { color: dynMuted }]}>合計已用 {fmt(totalLifeExp)}</Text>
+            <Text style={[styles.progressMeta, { color: dynMuted }]}>預算 {fmt(lifeBudgetTotal)}</Text>
           </View>
         </Card>
 
@@ -384,7 +723,7 @@ export function HomeScreen() {
               colorTop={dynamicGlassTop}
               borderRadius={radius.xl}>
               {/* 白霧保護底板：隔絕複雜背景，讓圓餅圖色彩穩定（borderRadius 與卡片同步，防 Android 方角殘留）*/}
-              <View style={[StyleSheet.absoluteFill, { borderRadius: radius.xl, overflow: 'hidden', backgroundColor: 'rgba(255,255,255,0.20)' }]} pointerEvents="none" />
+              <View style={[StyleSheet.absoluteFill, { borderRadius: radius.xl, overflow: 'hidden', backgroundColor: hasBg ? 'rgba(255,255,255,0.34)' : 'rgba(255,255,255,0.20)' }]} pointerEvents="none" />
               <Text style={[styles.pieTitle, textShadows.light]}>{p.title}</Text>
               <View style={styles.pieCenter}>
                 <SkiaPieChart
@@ -412,7 +751,7 @@ export function HomeScreen() {
                 <Text style={styles.dayLabelText}>{dayLabel(date)}</Text>
               </View>
               {/* 同日項目收進一個 GlassCard */}
-              <GlassCard style={styles.dayCard} colorTop={hasBg ? 'rgba(255,255,255,0.72)' : 'rgba(255,255,255,0.40)'}>
+              <GlassCard style={styles.dayCard} colorTop={hasBg ? 'rgba(255,255,255,0.82)' : 'rgba(255,255,255,0.40)'}>
                 {items.map((t, idx) => (
                   <View key={t.id}>
                     {idx > 0 && <View style={styles.txDivider} />}
@@ -476,7 +815,13 @@ export function HomeScreen() {
       {/* ══════════════════════════════════
           FAB 機器人（固定右下角，絕對定位）
       ══════════════════════════════════ */}
-      <FabRobot budgetPct={budgetPct} onPress={() => openAddModal('expense')} />
+      <RobotAssistant
+        budgetPct={budgetPct}
+        onRobotPress={() => openAddModal('expense')}
+        mealAlert={mealAlert}
+        onMealAlertShown={() => setMealAlert(null)}
+        financeSummary={financeSummary}
+      />
 
       {/* ── Toast ── */}
       {!!toast && (
@@ -523,7 +868,7 @@ export function HomeScreen() {
                   ]}
                   onPress={() => {
                     setAddType(type);
-                    setAddCat(type === 'expense' ? '餐飲' : '薪資');
+                    setAddCat(type === 'expense' ? '餐費' : '薪資');
                     setAddPay('現金');
                   }}
                 >
@@ -545,18 +890,49 @@ export function HomeScreen() {
               autoFocus
             />
 
-            {/* 類別 */}
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.catScroll}>
-              {CATS[addType].map(c => (
-                <Pressable
-                  key={c.n}
-                  style={[styles.catChip, addCat === c.n && styles.catChipActive]}
-                  onPress={() => setAddCat(c.n)}
-                >
-                  <Text style={styles.catChipText}>{c.e} {c.n}</Text>
-                </Pressable>
-              ))}
-            </ScrollView>
+            {/* 類別（三組：每日 / 每月 / 獨立統計）*/}
+            {addType === 'expense' ? (
+              <View style={styles.catGroupWrap}>
+                {[
+                  { label: '每日', cats: CAT_GROUPS.daily },
+                  { label: '每月', cats: CAT_GROUPS.monthly },
+                  { label: '獨立統計', cats: CAT_GROUPS.indep },
+                ].map(({ label, cats }) => (
+                  <View key={label} style={styles.catGroupRow}>
+                    <Text style={styles.catGroupLabel}>{label}</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                      <View style={styles.catGroupChips}>
+                        {cats.map(c => (
+                          <Pressable
+                            key={c.n}
+                            style={[styles.catChip, addCat === c.n && styles.catChipActive]}
+                            onPress={() => setAddCat(c.n)}
+                          >
+                            <Text style={styles.catChipText}>{c.e} {c.n}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    </ScrollView>
+                  </View>
+                ))}
+                {/* 提示文字 */}
+                {!!addCat && (
+                  <Text style={styles.catHintText}>{getCatHint(addCat)}</Text>
+                )}
+              </View>
+            ) : (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.catScroll}>
+                {CATS.income.map(c => (
+                  <Pressable
+                    key={c.n}
+                    style={[styles.catChip, addCat === c.n && styles.catChipActive]}
+                    onPress={() => setAddCat(c.n)}
+                  >
+                    <Text style={styles.catChipText}>{c.e} {c.n}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )}
 
             {/* 付款方式 */}
             {addType === 'expense' && (
@@ -722,6 +1098,218 @@ export function HomeScreen() {
           setReminderBills(null);
         }}
       />
+
+      {/* ════════════════════════════════════
+          投資資產 Bottom Sheet
+      ════════════════════════════════════ */}
+      <Modal
+        visible={showInvestmentModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => { setShowInvestmentModal(false); resetStockForm(); }}
+      >
+        <KeyboardAvoidingView behavior="padding" style={{ flex: 1, justifyContent: 'flex-end' }}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => { setShowInvestmentModal(false); resetStockForm(); }} />
+          <View style={styles.modalBox}>
+            <View style={styles.dragHandle} />
+
+            {investmentView === 'list' ? (
+              <>
+                {/* ── 持股列表 ── */}
+                <View style={styles.modalTitleRow}>
+                  <Text style={styles.investmentIcon}>📈</Text>
+                  <Text style={styles.modalTitle}>我的持股</Text>
+                </View>
+
+                {stockHoldings.length === 0 ? (
+                  <View style={styles.stockEmptyBox}>
+                    <Text style={styles.stockEmptyText}>尚未新增持股</Text>
+                    <Text style={styles.stockEmptyHint}>新增股票後，這裡會顯示投資市值與損益。</Text>
+                  </View>
+                ) : (
+                  stockHoldings.map((s) => {
+                    const avgCost     = s.shares > 0 ? s.investedAmount / s.shares : 0;
+                    const marketValue = s.shares * s.currentPrice;
+                    const profit      = marketValue - s.investedAmount;
+                    const rate        = s.investedAmount > 0 ? profit / s.investedAmount : 0;
+                    const profitColor = profit >= 0 ? colors.income : colors.expense;
+                    return (
+                      <View key={s.id} style={styles.stockRow}>
+                        <View style={styles.stockInfo}>
+                          <Text style={styles.stockSymbolName}>
+                            {s.symbol} {s.name}
+                          </Text>
+                          <Text style={styles.stockMeta}>
+                            {s.shares} 股｜投入 NT${Math.round(s.investedAmount).toLocaleString('zh-TW')}
+                          </Text>
+                          <Text style={styles.stockMeta}>
+                            現價 {s.currentPrice}｜均價 {avgCost.toFixed(1)}
+                          </Text>
+                          <Text style={styles.stockValue}>
+                            市值 NT${Math.round(marketValue).toLocaleString('zh-TW')}
+                          </Text>
+                          <Text style={[styles.stockProfit, { color: profitColor }]}>
+                            {profit >= 0 ? '+' : ''}NT${Math.round(Math.abs(profit)).toLocaleString('zh-TW')}
+                            {'  '}
+                            {rate >= 0 ? '+' : ''}{(rate * 100).toFixed(1)}%
+                          </Text>
+                        </View>
+                        <View style={styles.stockActions}>
+                          <Pressable onPress={() => startEditStock(s)} hitSlop={8} style={styles.stockActionBtn}>
+                            <Feather name="edit-2" size={17} color={colors.textSecondary} />
+                          </Pressable>
+                          <Pressable onPress={() => setDeleteStockTargetId(s.id)} hitSlop={8} style={styles.stockActionBtn}>
+                            <Feather name="trash-2" size={17} color={colors.expense} />
+                          </Pressable>
+                        </View>
+                      </View>
+                    );
+                  })
+                )}
+
+                <Pressable
+                  style={[styles.submitBtn, { backgroundColor: colors.savings, marginTop: 16 }]}
+                  onPress={() => { resetStockForm(); setInvestmentView('form'); }}
+                >
+                  <Text style={styles.submitBtnText}>＋ 新增股票</Text>
+                </Pressable>
+              </>
+            ) : (
+              <>
+                {/* ── 新增 / 編輯表單 ── */}
+                <View style={styles.modalTitleRow}>
+                  <Feather name="bar-chart-2" size={18} color={colors.savings} />
+                  <Text style={styles.modalTitle}>{editingStockId !== null ? '編輯持股' : '新增股票'}</Text>
+                </View>
+
+                <View style={styles.stockFormRow}>
+                  <TextInput
+                    style={[styles.stockInput, { flex: 1 }]}
+                    placeholder="股票代號（如 2330）"
+                    placeholderTextColor="#94A3B8"
+                    value={stockSymbol}
+                    onChangeText={setStockSymbol}
+                  />
+                  <TextInput
+                    style={[styles.stockInput, { flex: 1.6 }]}
+                    placeholder="股票名稱（如 台積電）"
+                    placeholderTextColor="#94A3B8"
+                    value={stockName}
+                    onChangeText={setStockName}
+                  />
+                </View>
+
+                <View style={styles.stockFormRow}>
+                  <TextInput
+                    style={[styles.stockInput, { flex: 1 }]}
+                    placeholder="持有股數"
+                    placeholderTextColor="#94A3B8"
+                    keyboardType="numeric"
+                    value={stockShares}
+                    onChangeText={setStockShares}
+                  />
+                  <TextInput
+                    style={[styles.stockInput, { flex: 1.4 }]}
+                    placeholder="投入金額（總計）"
+                    placeholderTextColor="#94A3B8"
+                    keyboardType="numeric"
+                    value={stockInvestedAmt}
+                    onChangeText={setStockInvestedAmt}
+                  />
+                </View>
+
+                {/* 市場選擇 */}
+                <View style={styles.payRow}>
+                  {([['TW', '台股'], ['US', '美股']] as const).map(([val, label]) => (
+                    <Pressable
+                      key={val}
+                      style={[styles.payBtn, stockMarket === val && styles.payBtnActive]}
+                      onPress={() => setStockMarket(val)}
+                    >
+                      <Text style={styles.payBtnText}>{label}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+
+                {/* 現價：自動抓取 + 手動 fallback */}
+                <View style={styles.stockFormRow}>
+                  <TextInput
+                    style={[styles.stockInput, { flex: 1 }]}
+                    placeholder="目前價格（自動抓取或手動輸入）"
+                    placeholderTextColor="#94A3B8"
+                    keyboardType="numeric"
+                    value={stockCurrentPrice}
+                    onChangeText={setStockCurrentPrice}
+                  />
+                  <Pressable
+                    style={[styles.payBtn, { flex: 0, paddingHorizontal: 14 }, isFetchingPrice && { opacity: 0.5 }]}
+                    onPress={handleFetchPrice}
+                    disabled={isFetchingPrice}
+                  >
+                    <Text style={styles.payBtnText}>{isFetchingPrice ? '抓取中…' : '抓取現價'}</Text>
+                  </Pressable>
+                </View>
+
+                <View style={styles.payRow}>
+                  {(['TWD', 'USD'] as const).map(c => (
+                    <Pressable
+                      key={c}
+                      style={[styles.payBtn, stockCurrency === c && styles.payBtnActive]}
+                      onPress={() => setStockCurrency(c)}
+                    >
+                      <Text style={styles.payBtnText}>{c}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+
+                <View style={styles.btnRow}>
+                  <Pressable style={styles.cancelBtn} onPress={() => { resetStockForm(); setInvestmentView('list'); }}>
+                    <Text style={styles.cancelText}>取消</Text>
+                  </Pressable>
+                  <Pressable style={[styles.confirmBtn, { backgroundColor: colors.savings }]} onPress={handleSaveStock}>
+                    <Text style={styles.confirmText}>{editingStockId !== null ? '儲存' : '新增'}</Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* ── 刪除持股確認 ── */}
+      <Modal
+        visible={deleteStockTargetId !== null}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setDeleteStockTargetId(null)}
+      >
+        <KeyboardAvoidingView behavior="padding" style={{ flex: 1, justifyContent: 'flex-end' }}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setDeleteStockTargetId(null)} />
+          <View style={styles.modalBox}>
+            <View style={styles.dragHandle} />
+            <View style={styles.modalTitleRow}>
+              <Feather name="trash-2" size={18} color={colors.expense} />
+              <Text style={styles.modalTitle}>確認刪除持股？</Text>
+            </View>
+            <Text style={styles.modalSub}>此操作無法復原</Text>
+            <View style={styles.btnRow}>
+              <Pressable style={styles.cancelBtn} onPress={() => setDeleteStockTargetId(null)}>
+                <Text style={styles.cancelText}>取消</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.confirmBtn, { backgroundColor: colors.expense }]}
+                onPress={() => {
+                  if (deleteStockTargetId !== null) deleteStockHolding(deleteStockTargetId);
+                  setDeleteStockTargetId(null);
+                  showToast('🗑️ 已刪除持股');
+                }}
+              >
+                <Text style={styles.confirmText}>刪除</Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -756,6 +1344,11 @@ const styles = StyleSheet.create({
     paddingBottom:     spacing.lg,
   },
   headerLeft:     { flex: 1, marginRight: spacing.sm },
+  headerTextScrim: {
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderRadius:    20,
+    padding:         12,
+  },
   headerDate:     { fontSize: fontSize.md, color: colors.textSecondary, marginBottom: 8 },
   headerGreeting: { fontSize: 20, fontWeight: '700', lineHeight: 28, color: colors.textPrimary, marginBottom: 6 },
   periodBadge: {
@@ -821,6 +1414,58 @@ const styles = StyleSheet.create({
   savingsBannerAmt:  { fontSize: fontSize.hero, fontWeight: '700', color: colors.textPrimary, marginBottom: 6 },
   savingsBannerSub:  { fontSize: fontSize.xs + 2, color: colors.textMuted },
   savingsPigWrap:    { width: 130, height: 120, alignItems: 'center', justifyContent: 'center', overflow: 'visible' },
+
+  // ── 投資資產卡 ──
+  investmentCardWrap: {
+    marginHorizontal: spacing.screenH,
+    marginBottom:     spacing.screenH,
+  },
+  investmentCard: {
+    paddingHorizontal: 18,
+    paddingVertical:   16,
+    overflow:          'hidden',
+  },
+  investmentTopRow:  { flexDirection: 'row', alignItems: 'center' },
+  investmentLeft:    { flex: 1 },
+  investmentTitleRow:{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
+  investmentIcon:    { fontSize: 18 },
+  investmentTitle:   { fontSize: fontSize.md, fontWeight: '600' },
+  investmentAmount:  { fontSize: fontSize.hero, fontWeight: '700', marginBottom: 4 },
+  investmentSub:     { fontSize: fontSize.md },
+  investmentRight:   { alignItems: 'flex-end', paddingLeft: 12 },
+  investmentProfit:  { fontSize: fontSize.xl, fontWeight: '700', marginBottom: 4 },
+  investmentRate:    { fontSize: fontSize.lg, fontWeight: '600' },
+  investmentEmpty:   { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 4 },
+  investmentEmptyHint:{ fontSize: fontSize.md, marginTop: 2 },
+
+  // ── 持股列表 ──
+  stockEmptyBox:  { paddingVertical: 20, alignItems: 'center', gap: 8 },
+  stockEmptyText: { fontSize: fontSize.xl, fontWeight: '600', color: colors.textPrimary },
+  stockEmptyHint: { fontSize: fontSize.md, color: colors.textMuted, textAlign: 'center' },
+  stockRow: {
+    flexDirection:    'row',
+    alignItems:       'center',
+    paddingVertical:  12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(0,0,0,0.07)',
+  },
+  stockInfo:        { flex: 1 },
+  stockSymbolName:  { fontSize: fontSize.lg, fontWeight: '700', color: colors.textPrimary, marginBottom: 3 },
+  stockMeta:        { fontSize: fontSize.base, color: colors.textMuted, marginBottom: 3 },
+  stockValue:       { fontSize: fontSize.md, color: colors.textSecondary, marginBottom: 2 },
+  stockProfit:      { fontSize: fontSize.md, fontWeight: '600' },
+  stockActions:     { flexDirection: 'row', gap: 10, paddingLeft: 12 },
+  stockActionBtn:   { padding: 6 },
+  stockFormRow:     { flexDirection: 'row', gap: 8, marginBottom: 10 },
+  stockInput: {
+    backgroundColor: '#F8FAFC',
+    borderRadius:    radius.lg,
+    padding:         10,
+    fontSize:        fontSize.md,
+    borderWidth:     1,
+    borderColor:     'rgba(0,0,0,0.06)',
+    color:           colors.textPrimary,
+  },
 
   // ── 進度條 ──
   progressCard: { marginHorizontal: spacing.screenH, marginBottom: spacing.screenH, borderRadius: radius.lg },
@@ -925,6 +1570,11 @@ const styles = StyleSheet.create({
   },
 
   catScroll: { marginBottom: spacing.lg },
+  catGroupWrap: { marginBottom: spacing.lg },
+  catGroupRow:  { marginBottom: 8 },
+  catGroupLabel:{ fontSize: fontSize.xs + 1, fontWeight: '600', color: '#94A3B8', marginBottom: 6, letterSpacing: 0.4 },
+  catGroupChips:{ flexDirection: 'row', gap: 8 },
+  catHintText:  { fontSize: fontSize.xs + 1, color: '#64748B', marginTop: 4, fontStyle: 'italic' },
   catChip: {
     paddingHorizontal: 14, paddingVertical: 8, borderRadius: radius.pill, marginRight: 8,
     backgroundColor: 'rgba(0,0,0,0.04)',

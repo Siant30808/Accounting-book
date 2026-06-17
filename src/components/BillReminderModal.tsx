@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, Modal, Pressable, StyleSheet, ScrollView } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import { Bill, Period, getCatIcon } from '../types';
+import { Bill, Period, getCatIcon, getBillPaymentMode } from '../types';
 import { localDateStr, getDueDateInPeriod } from '../utils/period';
 import { fmt } from '../utils/format';
 import { colors, radius, spacing, fontSize } from '../theme';
@@ -36,7 +36,8 @@ export function BillReminderModal({ visible, bills, period, onMarkPaid, onClose 
             {bills.map(bill => {
               const due = getDueDateInPeriod(bill.dueDay, period);
               const dueStr = localDateStr(due);
-              const overdue = !bill.autoDeduct && todayStr > dueStr;
+              const payMode = getBillPaymentMode(bill);
+              const overdue = payMode === 'manual' && todayStr > dueStr;
               return (
                 <View key={bill.id} style={styles.billRow}>
                   <View style={styles.billIconBox}>
@@ -46,7 +47,7 @@ export function BillReminderModal({ visible, bills, period, onMarkPaid, onClose 
                     <Text style={styles.billName}>{bill.name}</Text>
                     <View style={styles.billMetaRow}>
                       <Text style={styles.billMeta}>{due.getMonth() + 1}/{due.getDate()} 到期</Text>
-                      {bill.autoDeduct ? (
+                      {payMode === 'auto' ? (
                         <View style={[styles.tag, styles.tagAuto]}>
                           <Text style={[styles.tagText, { color: colors.credit }]}>自動扣繳</Text>
                         </View>
@@ -58,9 +59,9 @@ export function BillReminderModal({ visible, bills, period, onMarkPaid, onClose 
                     </View>
                   </View>
                   <Text style={styles.billAmount}>{fmt(bill.amount)}</Text>
-                  {!bill.autoDeduct && (
+                  {payMode === 'manual' && (
                     <Pressable style={styles.payBtn} onPress={() => onMarkPaid(bill.id)}>
-                      <Text style={styles.payBtnText}>已繳費</Text>
+                      <Text style={styles.payBtnText}>已繳費並記帳</Text>
                     </Pressable>
                   )}
                 </View>
