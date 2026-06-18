@@ -18,10 +18,10 @@ import { useBudgetStore } from '../store/useBudgetStore';
 const { width: SW, height: SH } = Dimensions.get('window');
 
 // ── 機器人本體尺寸
-const ROBOT_SIZE   = 140;
-const SHADOW_PAD   = 20;
-const OUTER_SIZE   = ROBOT_SIZE + SHADOW_PAD * 2;  // 180
-const OUTER_CENTER = OUTER_SIZE / 2;               // 90
+const ROBOT_SIZE   = 116;
+const SHADOW_PAD   = 16;
+const OUTER_SIZE   = ROBOT_SIZE + SHADOW_PAD * 2;  // 148
+const OUTER_CENTER = OUTER_SIZE / 2;               // 74
 
 // ── 可見面板控制點（貼合外殼洞口）
 const FV_X = ROBOT_SIZE * 0.205;  // 28.7
@@ -38,6 +38,9 @@ const FB_H = FV_H + ROBOT_SIZE * 0.055;  // 70.0
 // ── 面罩中心（用於表情定位）
 const FACE_CX = FV_X + FV_W / 2;
 const FACE_CY = FV_Y + FV_H * 0.47;
+
+// ── 表情縮放（以面板中心為基準，面板本身不變）
+const FACE_EXPR_SCALE = 0.84;
 
 // 建立符合洞口形狀的 Path（上寬、側直、下方兩側內收）
 function makeFacePath(x: number, y: number, w: number, h: number) {
@@ -320,8 +323,11 @@ export function FabRobot({ budgetPct = 0, onPress }: FabRobotProps) {
   const facePath = useMemo(() => buildFacePath(stage.name, blinkSnap), [stage.name, blinkSnap]);
 
   const faceTransform = useDerivedValue(() => [
-    { translateX: faceOffsetX.value },
-    { translateY: faceOffsetY.value },
+    { translateX: FACE_CX + faceOffsetX.value },
+    { translateY: FACE_CY + faceOffsetY.value },
+    { scale: FACE_EXPR_SCALE },
+    { translateX: -FACE_CX },
+    { translateY: -FACE_CY },
   ]);
 
   const EDGE_MARGIN = 0;
@@ -503,9 +509,9 @@ export function FabRobot({ budgetPct = 0, onPress }: FabRobotProps) {
               mode="alpha"
               mask={
                 <Group transform={faceTransform}>
-                  <Path path={facePath} color="white" style="stroke" strokeWidth={3.5} strokeCap="round" strokeJoin="round" />
-                  <Path path={facePath} color="white" style="stroke" strokeWidth={14.0} strokeCap="round" strokeJoin="round" opacity={0.35}>
-                    <BlurMask blur={5} style="normal" />
+                  <Path path={facePath} color="white" style="stroke" strokeWidth={3.0} strokeCap="round" strokeJoin="round" />
+                  <Path path={facePath} color="white" style="stroke" strokeWidth={12} strokeCap="round" strokeJoin="round" opacity={0.35}>
+                    <BlurMask blur={4.5} style="normal" />
                   </Path>
                 </Group>
               }
@@ -513,8 +519,8 @@ export function FabRobot({ budgetPct = 0, onPress }: FabRobotProps) {
               <Path path={FACE_LED_GRID} color={stage.glow} style="fill" opacity={1.0} />
             </Mask>
             <Group transform={faceTransform}>
-              <Path path={facePath} color={stage.glow} style="stroke" strokeWidth={8.0} strokeCap="round" opacity={0.15}>
-                <BlurMask blur={6.0} style="normal" />
+              <Path path={facePath} color={stage.glow} style="stroke" strokeWidth={6.5} strokeCap="round" opacity={0.15}>
+                <BlurMask blur={5.2} style="normal" />
               </Path>
             </Group>
           </Group>

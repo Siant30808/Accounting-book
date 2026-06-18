@@ -15,10 +15,10 @@ import Animated, {
 
 const { width: SW } = Dimensions.get('window');
 
-const CARD_MAX_W  = 272;
-const CARD_MIN_W  = 200;
-const ROBOT_SIZE  = 180;
-const CARD_GAP    = 12;   // 卡片與機器人的水平間距
+const CARD_MAX_W       = 272;
+const CARD_MIN_W       = 200;
+const ROBOT_OUTER_SIZE = 148;
+const CARD_GAP         = 12;   // 卡片與機器人的水平間距
 
 export interface BubbleStat {
   label: string;
@@ -77,10 +77,10 @@ export function RobotBubble({
   }, [visible]);
 
   // 定位：機器人在右 → 卡片靠左上；在左 → 靠右上
-  const isRobotRight = robotX + ROBOT_SIZE / 2 > SW / 2;
+  const isRobotRight = robotX + ROBOT_OUTER_SIZE / 2 > SW / 2;
   const cardX = isRobotRight
     ? Math.max(8, robotX - CARD_MAX_W - CARD_GAP)
-    : Math.min(SW - CARD_MAX_W - 8, robotX + ROBOT_SIZE + CARD_GAP);
+    : Math.min(SW - CARD_MAX_W - 8, robotX + ROBOT_OUTER_SIZE + CARD_GAP);
   const cardY = Math.max(20, robotY - 20);
 
   const animStyle = useAnimatedStyle(() => ({
