@@ -324,8 +324,24 @@ export function FabRobot({ budgetPct = 0, onPress }: FabRobotProps) {
     { translateY: faceOffsetY.value },
   ]);
 
-  const posX = useSharedValue(savedPos?.x ?? SW - OUTER_SIZE - 8);
-  const posY = useSharedValue(savedPos?.y ?? SH - OUTER_SIZE - 100);
+  const EDGE_MARGIN = 0;
+  const SAFE_TOP    = 72;
+  const SAFE_BOTTOM = 140;
+
+  const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+  const defaultX = SW - OUTER_SIZE - 4;
+  const defaultY = SH - OUTER_SIZE - 150;
+
+  const initialX = savedPos
+    ? clamp(savedPos.x, EDGE_MARGIN, SW - OUTER_SIZE - EDGE_MARGIN)
+    : defaultX;
+  const initialY = savedPos
+    ? clamp(savedPos.y, SAFE_TOP, SH - OUTER_SIZE - SAFE_BOTTOM)
+    : defaultY;
+
+  const posX = useSharedValue(initialX);
+  const posY = useSharedValue(initialY);
 
   // 長按拖曳控制
   const isLongPressDragging = useRef(false);
@@ -336,9 +352,6 @@ export function FabRobot({ budgetPct = 0, onPress }: FabRobotProps) {
       if (longPressTimer.current) clearTimeout(longPressTimer.current);
     };
   }, []);
-
-  const SAFE_TOP    = 80;
-  const SAFE_BOTTOM = 110;
 
   const animStyle = useAnimatedStyle(() => ({
     position:  'absolute',
@@ -413,7 +426,7 @@ export function FabRobot({ budgetPct = 0, onPress }: FabRobotProps) {
       dragScale.value        = withSpring(1, { damping: 14, stiffness: 160 });
       interactionBoost.value = withTiming(0, { duration: 240 });
 
-      const snapX  = posX.value + OUTER_CENTER < SW / 2 ? 8 : SW - OUTER_SIZE - 8;
+      const snapX  = posX.value + OUTER_CENTER < SW / 2 ? EDGE_MARGIN : SW - OUTER_SIZE - EDGE_MARGIN;
       const clampY = Math.min(Math.max(posY.value, SAFE_TOP), SH - OUTER_SIZE - SAFE_BOTTOM);
       posX.value = withSpring(snapX,  { damping: 15 });
       posY.value = withSpring(clampY, { damping: 15 });

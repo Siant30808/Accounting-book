@@ -20,14 +20,14 @@ import { PieLegend } from '../components/PieLegend';
 import { fmt } from '../utils/format';
 import { localDateStr } from '../utils/period';
 import { Period, normalizeCategory } from '../types';
-import { colors, radius, spacing, fontSize, textShadows } from '../theme';
+import { colors, radius, spacing, fontSize } from '../theme';
 import { GlassCard } from '../components/GlassCard';
 
-// 圓餅圖顏色（10 色）
+// 圓餅圖顏色（低飽和 10 色）
 const PIE_COLORS = [
-  '#F472B6','#FF7043','#FBBF24','#34D399',
-  '#38BDF8','#A78BFA','#F43F5E','#10B981',
-  '#60A5FA','#FB923C',
+  '#DB4F91','#F97316','#F59E0B','#10B981',
+  '#0284C7','#8B5CF6','#64748B','#14B8A6',
+  '#6366F1','#FB7185',
 ];
 
 type ExpandedKey = string | null;
@@ -173,9 +173,9 @@ export function ReportScreen() {
         {currentRow && (
           <GlassCard
             style={sty.summaryCard}
-            colorTop="rgba(167,139,250,0.20)"
-            colorBot="rgba(52,211,153,0.08)"
-            borderRadius={radius.xl}
+            colorTop="rgba(255,255,255,0.76)"
+            colorBot="rgba(248,250,252,0.35)"
+            borderRadius={24}
           >
             <View style={sty.summaryHead}>
               <Text style={sty.summaryTitle}>本期摘要</Text>
@@ -241,9 +241,8 @@ export function ReportScreen() {
                 <Pressable onPress={() => toggleExpand(row.p.startStr)}>
                   <GlassCard
                     style={sty.periodCard}
-                    colorTop="rgba(255,255,255,0.48)"
-                    colorBot="rgba(255,255,255,0.14)"
-                    borderRadius={radius.lg}
+                    colorTop="rgba(255,255,255,0.74)"
+                    borderRadius={24}
                   >
                     <View style={sty.periodHead}>
                       <Text style={sty.periodLabel}>{row.p.label}</Text>
@@ -288,8 +287,8 @@ export function ReportScreen() {
                 {isExp && detail && (
                   <GlassCard
                     style={sty.detailCard}
-                    colorTop="rgba(255,255,255,0.62)"
-                    borderRadius={radius.lg}
+                    colorTop="rgba(248,250,252,0.90)"
+                    borderRadius={22}
                   >
                     {/* 預算回顧 */}
                     <Text style={sty.detailTitle}>本期預算回顧</Text>
@@ -382,129 +381,127 @@ const sty = StyleSheet.create({
   content: { paddingBottom: spacing.xxl },
 
   // Header
-  header:      { paddingHorizontal: spacing.xxl, paddingTop: spacing.xxl, paddingBottom: spacing.xl },
-  headerSub:   { fontSize: fontSize.md, color: colors.textMuted, marginBottom: spacing.xs },
-  headerTitle: { fontSize: fontSize.h1, fontWeight: '700', color: colors.textPrimary },
+  header:      { paddingHorizontal: 24, paddingTop: 24, paddingBottom: 16 },
+  headerSub:   { fontSize: 14, fontWeight: '600', color: '#94A3B8', marginBottom: 4 },
+  headerTitle: { fontSize: 28, lineHeight: 34, fontWeight: '800', color: '#1E293B' },
 
   // 本期摘要卡
   summaryCard: {
-    marginHorizontal: spacing.xl,
-    marginBottom:     spacing.lg,
-    padding:          spacing.xl,
+    marginHorizontal: 24,
+    marginBottom:     18,
+    padding:          18,
     overflow:         'hidden',
   },
   summaryHead: {
     flexDirection:  'row',
     justifyContent: 'space-between',
     alignItems:     'center',
-    marginBottom:   spacing.lg,
+    marginBottom:   14,
   },
-  summaryTitle:  { fontSize: fontSize.lg, fontWeight: '700', color: colors.textPrimary },
-  summaryPeriod: { fontSize: fontSize.sm, color: colors.textMuted },
+  summaryTitle:  { fontSize: 18, fontWeight: '700', color: '#1E293B' },
+  summaryPeriod: { fontSize: 12, fontWeight: '500', color: '#94A3B8' },
 
   // 4 格 grid（本期摘要 & 週期卡共用）
   fourGrid: { flexDirection: 'row', flexWrap: 'wrap' },
-  gridCell: { width: '50%', paddingVertical: spacing.sm, paddingRight: spacing.sm },
+  gridCell: { width: '50%', paddingVertical: 8, paddingRight: 8 },
   cellLabel: {
-    fontSize:     fontSize.sm,
-    color:        colors.textMuted,
+    fontSize:     12,
+    fontWeight:   '500',
+    color:        '#94A3B8',
     marginBottom: 4,
-    ...textShadows.light,
   },
   cellValue: {
-    fontSize:   fontSize.xl,
+    fontSize:   17,
     fontWeight: '800',
-    ...textShadows.light,
   },
   cellValueSm: {
-    fontSize:   fontSize.md,
+    fontSize:   15,
     fontWeight: '700',
-    ...textShadows.light,
   },
 
   // 分區標題
   sectionTitle: {
-    fontSize:         fontSize.lg,
-    fontWeight:       '700',
-    color:            colors.textPrimary,
-    paddingHorizontal: spacing.xl,
-    marginBottom:     spacing.sm,
-    marginTop:        spacing.xs,
+    fontSize:          18,
+    fontWeight:        '700',
+    color:             '#1E293B',
+    paddingHorizontal: 24,
+    marginBottom:      10,
+    marginTop:         6,
   },
 
   // 週期卡
-  periodBlock: { marginBottom: spacing.xs },
+  periodBlock: { marginBottom: 8 },
   periodCard: {
-    marginHorizontal: spacing.xl,
-    padding:          spacing.lg,
+    marginHorizontal: 24,
+    padding:          16,
     overflow:         'hidden',
   },
   periodHead: {
     flexDirection:  'row',
     justifyContent: 'space-between',
     alignItems:     'center',
-    marginBottom:   spacing.md,
+    marginBottom:   12,
   },
-  periodLabel: { fontSize: fontSize.base, fontWeight: '700', color: colors.textPrimary },
+  periodLabel: { fontSize: 16, fontWeight: '700', color: '#1E293B' },
 
   // 展開細節卡
   detailCard: {
-    marginHorizontal: spacing.xl,
-    marginTop:        2,
-    padding:          spacing.lg,
+    marginHorizontal: 24,
+    marginTop:        4,
+    padding:          16,
     overflow:         'hidden',
   },
   detailTitle: {
-    fontSize:     fontSize.base,
+    fontSize:     15,
     fontWeight:   '700',
-    color:        colors.textSecondary,
-    marginBottom: spacing.sm,
+    color:        '#475569',
+    marginBottom: 8,
   },
 
   // 預算行
   budgetRow: {
-    flexDirection:   'row',
-    justifyContent:  'space-between',
-    alignItems:      'center',
-    paddingVertical: 6,
+    flexDirection:     'row',
+    justifyContent:    'space-between',
+    alignItems:        'center',
+    paddingVertical:   6,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: 'rgba(0,0,0,0.06)',
   },
-  budgetCat:   { fontSize: fontSize.base, color: colors.textPrimary, flex: 1 },
+  budgetCat:   { fontSize: 14, fontWeight: '500', color: '#1E293B', flex: 1 },
   budgetRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  budgetAmt:   { fontSize: fontSize.base, fontWeight: '600', color: colors.textSecondary },
-  budgetSlash: { fontSize: fontSize.sm, color: colors.textMuted, fontWeight: '400' },
-  budgetPct:   { fontSize: fontSize.sm, color: colors.textMuted, width: 34, textAlign: 'right' },
+  budgetAmt:   { fontSize: 14, fontWeight: '600', color: '#475569' },
+  budgetSlash: { fontSize: 12, color: '#94A3B8', fontWeight: '400' },
+  budgetPct:   { fontSize: 12, fontWeight: '500', color: '#94A3B8', width: 34, textAlign: 'right' },
 
   // 最大支出行
   largestRow: {
-    flexDirection:  'row',
-    justifyContent: 'space-between',
-    alignItems:     'center',
+    flexDirection:   'row',
+    justifyContent:  'space-between',
+    alignItems:      'center',
     paddingVertical: 4,
   },
-  largestNote: { flex: 1, fontSize: fontSize.base, color: colors.textSecondary },
-  largestAmt:  { fontSize: fontSize.base, fontWeight: '700', marginLeft: 8 },
+  largestNote: { flex: 1, fontSize: 14, color: '#475569' },
+  largestAmt:  { fontSize: 14, fontWeight: '700', marginLeft: 8 },
 
   // 圓餅圖區
   pieWrap: {
-    marginTop:       8,
-    borderRadius:    radius.md,
-    overflow:        'hidden',
-    backgroundColor: 'rgba(255,255,255,0.35)',
-    paddingHorizontal: spacing.md,
-    paddingBottom:   spacing.md,
+    marginTop:         8,
+    borderRadius:      16,
+    overflow:          'hidden',
+    backgroundColor:   'rgba(248,250,252,0.80)',
+    paddingHorizontal: 12,
+    paddingBottom:     12,
   },
 
   // 無資料
   emptyCard: {
-    marginHorizontal: spacing.xl,
-    padding:          spacing.xxl,
+    marginHorizontal: 24,
+    padding:          32,
     overflow:         'hidden',
   },
   emptyText: {
-    color:      colors.textMuted,
-    fontSize:   fontSize.base,
+    color:      '#94A3B8',
+    fontSize:   14,
     lineHeight: 22,
     textAlign:  'center',
   },

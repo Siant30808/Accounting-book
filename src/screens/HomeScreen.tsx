@@ -17,6 +17,7 @@ import {
   getCatIcon, normalizeCategory, getCatGroup, getBillPaymentMode, periodKey,
 } from '../types';
 import { AddTransactionModal, AddTransactionInput } from '../components/AddTransactionModal';
+import AppBottomSheet, { SheetButton } from '../components/AppBottomSheet';
 import { colors, radius, spacing, fontSize, shadows, textShadows } from '../theme';
 import { GlassCard } from '../components/GlassCard';
 import { fetchStockPrice, StockPriceFetchError } from '../services/stockPriceService';
@@ -928,108 +929,76 @@ export function HomeScreen() {
       {/* ════════════════════════════════════
           存款 Modal（Bottom Sheet）
       ════════════════════════════════════ */}
-      <Modal
+      <AppBottomSheet
         visible={showSavingsModal}
-        animationType="slide"
-        transparent
-        onRequestClose={() => { Keyboard.dismiss(); setShowSavingsModal(false); }}
+        onClose={() => setShowSavingsModal(false)}
+        title="編輯存款基準"
+        iconName="dollar-sign"
+        avoidKeyboard
+        buttons={[
+          {
+            label: '取消',
+            variant: 'cancel',
+            onPress: () => setShowSavingsModal(false),
+          },
+          {
+            label: '儲存',
+            variant: 'primary',
+            onPress: () => {
+              const v = parseFloat(savingsInput);
+              if (isNaN(v) || v < 0) { showToast('❌ 無效金額'); return; }
+              useBudgetStore.getState().updateSavings(v);
+              Keyboard.dismiss();
+              setShowSavingsModal(false);
+              showToast('🏦 存款已更新');
+            },
+          },
+        ]}
       >
-        <Pressable style={StyleSheet.absoluteFill} onPress={() => { Keyboard.dismiss(); setShowSavingsModal(false); }} />
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={{ flex: 1, justifyContent: 'flex-end' }}
-          pointerEvents="box-none"
-        >
-          <View style={[
-            styles.savingsSheet,
-            Platform.OS === 'android' && savingsKbHeight > 0 && { marginBottom: savingsKbHeight },
-          ]}>
-            <View style={styles.dragHandle} />
-
-            {/* 標題 */}
-            <View style={styles.modalTitleRow}>
-              <Feather name="dollar-sign" size={20} color="#8B5CF6" />
-              <Text style={styles.savingsSheetTitle}>編輯存款基準</Text>
-            </View>
-
-            {/* 輸入區 */}
-            <View style={styles.savingsSheetBody}>
-              <Text style={styles.savingsFieldLabel}>存款基準</Text>
-              <TextInput
-                style={styles.savingsInput}
-                placeholder="NT$ 0"
-                placeholderTextColor="#CBD5E1"
-                keyboardType="decimal-pad"
-                value={savingsInput}
-                onChangeText={setSavingsInput}
-              />
-              <Text style={styles.savingsHint}>
-                首頁存款會依照「存款基準 + 本期結餘」自動計算
-              </Text>
-            </View>
-
-            {/* 底部按鈕 */}
-            <View style={styles.savingsFooter}>
-              <Pressable
-                style={styles.savingsCancelBtn}
-                onPress={() => { Keyboard.dismiss(); setShowSavingsModal(false); }}
-              >
-                <Text style={styles.savingsCancelText}>取消</Text>
-              </Pressable>
-              <Pressable
-                style={styles.savingsSaveBtn}
-                onPress={() => {
-                  const v = parseFloat(savingsInput);
-                  if (isNaN(v) || v < 0) { showToast('❌ 無效金額'); return; }
-                  useBudgetStore.getState().updateSavings(v);
-                  Keyboard.dismiss();
-                  setShowSavingsModal(false);
-                  showToast('🏦 存款已更新');
-                }}
-              >
-                <Text style={styles.savingsSaveText}>儲存</Text>
-              </Pressable>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+        <View style={styles.savingsSheetBody}>
+          <Text style={styles.savingsFieldLabel}>存款基準</Text>
+          <TextInput
+            style={styles.savingsInput}
+            placeholder="NT$ 0"
+            placeholderTextColor="#CBD5E1"
+            keyboardType="decimal-pad"
+            value={savingsInput}
+            onChangeText={setSavingsInput}
+          />
+          <Text style={styles.savingsHint}>
+            首頁存款會依照「存款基準 + 本期結餘」自動計算
+          </Text>
+        </View>
+      </AppBottomSheet>
 
       {/* ════════════════════════════════════
           刪除確認 Modal（Bottom Sheet）
       ════════════════════════════════════ */}
-      <Modal
+      <AppBottomSheet
         visible={deleteTargetId !== null}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setDeleteTargetId(null)}
-      >
-        <KeyboardAvoidingView behavior="padding" style={{ flex: 1, justifyContent: 'flex-end' }}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setDeleteTargetId(null)} />
-          <View style={styles.modalBox}>
-            <View style={styles.dragHandle} />
-            <View style={styles.modalTitleRow}>
-              <Feather name="trash-2" size={18} color={colors.expense} />
-              <Text style={styles.modalTitle}>確認刪除？</Text>
-            </View>
-            <Text style={styles.modalSub}>此操作無法復原</Text>
-            <View style={styles.btnRow}>
-              <Pressable style={styles.cancelBtn} onPress={() => setDeleteTargetId(null)}>
-                <Text style={styles.cancelText}>取消</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.confirmBtn, { backgroundColor: colors.expense }]}
-                onPress={() => {
-                  if (deleteTargetId !== null) deleteTransaction(deleteTargetId);
-                  setDeleteTargetId(null);
-                  showToast('🗑️ 已刪除');
-                }}
-              >
-                <Text style={styles.confirmText}>刪除</Text>
-              </Pressable>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+        onClose={() => setDeleteTargetId(null)}
+        title="確認刪除？"
+        iconName="trash-2"
+        iconColor="#DB4F91"
+        subtitle="此操作無法復原"
+        avoidKeyboard={false}
+        buttons={[
+          {
+            label: '取消',
+            variant: 'cancel',
+            onPress: () => setDeleteTargetId(null),
+          },
+          {
+            label: '刪除',
+            variant: 'danger',
+            onPress: () => {
+              if (deleteTargetId !== null) deleteTransaction(deleteTargetId);
+              setDeleteTargetId(null);
+              showToast('🗑️ 已刪除');
+            },
+          },
+        ]}
+      />
 
       {/* ════════════════════════════════════
           固定帳單提醒 Modal
@@ -1332,39 +1301,31 @@ export function HomeScreen() {
       </Modal>
 
       {/* ── 刪除持股確認 ── */}
-      <Modal
+      <AppBottomSheet
         visible={deleteStockTargetId !== null}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setDeleteStockTargetId(null)}
-      >
-        <KeyboardAvoidingView behavior="padding" style={{ flex: 1, justifyContent: 'flex-end' }}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setDeleteStockTargetId(null)} />
-          <View style={styles.modalBox}>
-            <View style={styles.dragHandle} />
-            <View style={styles.modalTitleRow}>
-              <Feather name="trash-2" size={18} color={colors.expense} />
-              <Text style={styles.modalTitle}>確認刪除持股？</Text>
-            </View>
-            <Text style={styles.modalSub}>此操作無法復原</Text>
-            <View style={styles.btnRow}>
-              <Pressable style={styles.cancelBtn} onPress={() => setDeleteStockTargetId(null)}>
-                <Text style={styles.cancelText}>取消</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.confirmBtn, { backgroundColor: colors.expense }]}
-                onPress={() => {
-                  if (deleteStockTargetId !== null) deleteStockHolding(deleteStockTargetId);
-                  setDeleteStockTargetId(null);
-                  showToast('🗑️ 已刪除持股');
-                }}
-              >
-                <Text style={styles.confirmText}>刪除</Text>
-              </Pressable>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+        onClose={() => setDeleteStockTargetId(null)}
+        title="確認刪除持股？"
+        iconName="trash-2"
+        iconColor="#DB4F91"
+        subtitle="此操作無法復原"
+        avoidKeyboard={false}
+        buttons={[
+          {
+            label: '取消',
+            variant: 'cancel',
+            onPress: () => setDeleteStockTargetId(null),
+          },
+          {
+            label: '刪除',
+            variant: 'danger',
+            onPress: () => {
+              if (deleteStockTargetId !== null) deleteStockHolding(deleteStockTargetId);
+              setDeleteStockTargetId(null);
+              showToast('🗑️ 已刪除持股');
+            },
+          },
+        ]}
+      />
     </SafeAreaView>
   );
 }
