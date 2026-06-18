@@ -123,6 +123,8 @@ export interface Bill {
   lastPaidPeriodKey?: string;
   /** 手動繳費：最後繳費時間（ISO string）*/
   paidAt?:            string;
+  /** 帳單是否啟用（預設 true，false 時不觸發提醒也不自動記帳）*/
+  enabled?:           boolean;
 }
 
 /** 由 period.startStr（YYYY-MM-DD）產生月份 key（YYYY-MM）*/

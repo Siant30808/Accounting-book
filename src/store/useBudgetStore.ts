@@ -322,6 +322,7 @@ export const useBudgetStore = create<BudgetState>((set, get) => ({
     let changed = false;
     bills.forEach(b => {
       const isAuto = getBillPaymentMode(b) === 'auto';
+      if (b.enabled === false) return;
       if (isAuto && !b.paidPeriods.includes(period.startStr)) {
         const due = getDueDateInPeriod(b.dueDay, period);
         if (todayStr >= localDateStr(due)) {
@@ -355,6 +356,7 @@ export const useBudgetStore = create<BudgetState>((set, get) => ({
 
     // 手動繳費帳單：本期尚未繳費（lastPaidPeriodKey 或 paidPeriods 任一標記即視為已繳）
     const unpaid = nextBills.filter(b => {
+      if (b.enabled === false) return false;
       if (getBillPaymentMode(b) !== 'manual') return false;
       const alreadyPaid = b.lastPaidPeriodKey === pKey || b.paidPeriods.includes(period.startStr);
       return !alreadyPaid;

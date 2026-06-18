@@ -2,6 +2,7 @@
  * RobotAssistant.tsx ── 整合元件：機器人 + 浮動提示卡片
  */
 import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { Dimensions } from 'react-native';
 import { FabRobot }    from './FabRobot';
 import { RobotBubble, BubbleStat, BubbleTone } from './RobotBubble';
 
@@ -84,6 +85,17 @@ export interface RobotFinanceSummary {
     daysUntil:   number;
     paymentMode: 'manual' | 'auto';
   }[];
+
+  largestExpense?: {
+    note:     string;
+    amount:   number;
+    category: string;
+  };
+
+  largestMealExpense?: {
+    note:   string;
+    amount: number;
+  };
 }
 
 // ── 根據財務摘要產生具體訊息
@@ -130,13 +142,22 @@ function buildRobotSimpleMessage(s: RobotFinanceSummary, budgetPct: number): str
     return `${highCat.name}已經用了 ${Math.round(highCat.pct)}%，這個月要稍微留意。`;
   }
 
-  // 6. 今日有餐費記錄，顯示數字
+  // 6. 本期最大支出提醒（偶爾出現，機率 35%）
+  if (s.largestExpense && s.largestExpense.amount > 0 && Math.random() < 0.35) {
+    const { note, amount, category } = s.largestExpense;
+    if (category === '餐費' && s.largestMealExpense) {
+      return `本期目前最大餐費是「${s.largestMealExpense.note}」${fmtAmt(s.largestMealExpense.amount)}。`;
+    }
+    return `本期目前最大支出是「${note}」${fmtAmt(amount)}，分類在${category}。`;
+  }
+
+  // 7. 今日有餐費記錄，顯示數字
   if (s.todayMealSpent > 0) {
     const remain = Math.max(0, mealAllowance - s.todayMealSpent);
     return `今天餐費 ${fmtAmt(s.todayMealSpent)} / ${fmtAmt(mealAllowance)}，今日還能吃 ${fmtAmt(remain)}。`;
   }
 
-  // 7. 全部正常
+  // 8. 全部正常
   if (budgetPct <= 30) return '餐費和生活預算目前都很穩，繼續保持！';
   if (budgetPct <= 60) return `生活預算已用 ${budgetPct}%，目前步調正常。`;
   return `預算使用率 ${budgetPct}%，稍微留意後續支出。`;
@@ -150,15 +171,18 @@ export interface BubbleAlert {
 }
 
 interface RobotAssistantProps {
-  budgetPct:          number;
-  onRobotPress?:      () => void;
-  mealAlert?:         BubbleAlert | null;
-  onMealAlertShown?:  () => void;
-  financeSummary?:    RobotFinanceSummary;
+  budgetPct:           number;
+  onRobotPress?:       () => void;
+  mealAlert?:          BubbleAlert | null;
+  onMealAlertShown?:   () => void;
+  financeSummary?:     RobotFinanceSummary;
+  afterRecord?:        string | null;
+  onAfterRecordShown?: () => void;
 }
 
 export function RobotAssistant({
-  budgetPct, onRobotPress, mealAlert, onMealAlertShown, financeSummary,
+  budgetPct, onRobotPress, mealAlert, onMealAlertShown,
+  financeSummary, afterRecord, onAfterRecordShown,
 }: RobotAssistantProps) {
   const [visible,      setVisible]      = useState(false);
   const [bubbleMsg,    setBubbleMsg]    = useState('');
@@ -193,6 +217,24 @@ export function RobotAssistant({
     hideTimer.current = setTimeout(() => setVisible(false), ms);
     onMealAlertShown?.();
   }, [mealAlert]);
+
+  // 記帳後回饋：simple message，顯示 3.5 秒
+  useEffect(() => {
+    if (!afterRecord) return;
+    cancelTimer();
+    const { width, height } = Dimensions.get('window');
+    const pos = (lastPosRef.current.x || lastPosRef.current.y)
+      ? lastPosRef.current
+      : { x: width - 48, y: height - 150 };
+    setBubbleTitle(undefined);
+    setBubbleMsg(afterRecord);
+    setBubbleStats(undefined);
+    setBubbleTone(undefined);
+    setBubblePos(pos);
+    setVisible(true);
+    hideTimer.current = setTimeout(() => setVisible(false), 3500);
+    onAfterRecordShown?.();
+  }, [afterRecord]);
 
   // 一般點擊：根據 financeSummary 產生具體訊息（simple mode）
   const showSimpleMessage = useCallback((px: number, py: number) => {

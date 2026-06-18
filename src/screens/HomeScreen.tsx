@@ -6,10 +6,7 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import { Feather } from '@expo/vector-icons';
-import DateTimePicker from '@react-native-community/datetimepicker';
 import { useBudgetStore }       from '../store/useBudgetStore';
-import { SkiaPieChart, ChartSlice } from '../components/SkiaPieChart';
-import { PieLegend }            from '../components/PieLegend';
 import { RobotAssistant, BubbleAlert, RobotFinanceSummary } from '../components/RobotAssistant';
 import { PigSavings }           from '../components/PigSavings';
 import { fmt, dayLabel }        from '../utils/format';
@@ -17,27 +14,14 @@ import { localDateStr, getPeriod, getDueDateInPeriod } from '../utils/period';
 import { BillReminderModal } from '../components/BillReminderModal';
 import {
   Transaction, Bill, StockHolding,
-  CATS, CAT_GROUPS, getCatIcon, getCatHint, normalizeCategory, getBillPaymentMode, periodKey,
+  getCatIcon, normalizeCategory, getCatGroup, getBillPaymentMode, periodKey,
 } from '../types';
-import { colors, radius, spacing, fontSize, shadows, glows, textShadows } from '../theme';
+import { AddTransactionModal, AddTransactionInput } from '../components/AddTransactionModal';
+import { colors, radius, spacing, fontSize, shadows, textShadows } from '../theme';
 import { GlassCard } from '../components/GlassCard';
 import { fetchStockPrice, StockPriceFetchError } from '../services/stockPriceService';
 
 const kkleBwaGif = require('../../assets/KkleBWA.gif');
-
-const CASH_COLORS = ['#FF5252','#FF7043','#E91E63','#FF9800','#F44336','#FF6D00'];
-const CARD_COLORS = ['#2196F3','#00BCD4','#3F51B5','#00E5FF','#1976D2','#40C4FF'];
-
-function buildSlices(txs: Transaction[], colors: string[]): ChartSlice[] {
-  const map: Record<string, number> = {};
-  txs.forEach(t => {
-    const norm = normalizeCategory(t.cat);
-    map[norm] = (map[norm] ?? 0) + t.amount;
-  });
-  return Object.entries(map).map(([label, amount], i) => ({
-    label, amount, color: colors[i % colors.length],
-  }));
-}
 
 // ── 簡單卡片：GlassCard 直接帶 margin/padding，不用外層 elevation View ──
 function Card({ children, style, colorTop }: { children: React.ReactNode; style?: object; colorTop?: string }) {
@@ -52,26 +36,6 @@ function InsetBox({ children, style }: { children: React.ReactNode; style?: obje
   return <View style={[styles.insetBox, style]}>{children}</View>;
 }
 
-/** 粉彩玻璃長方形卡片（四宮格專用）*/
-function NeuCard({ children, glowColor = 'rgba(255,255,255,0.02)', glow, colorTop = 'rgba(255,255,255,0.40)' }: {
-  children:   React.ReactNode;
-  glow?:      object;
-  glowColor?: string;
-  colorTop?:  string;
-}) {
-  return (
-    // 直接用 GlassCard，不加外層 elevation View（避免 Android 強制白底）
-    <GlassCard
-      style={[styles.neuCardOuter, glow]}
-      colorTop={colorTop}
-      colorBot={glowColor}
-    >
-      <View style={styles.neuCardBody}>
-        <View style={styles.sumRow}>{children}</View>
-      </View>
-    </GlassCard>
-  );
-}
 
 export function HomeScreen() {
   const {
@@ -127,14 +91,6 @@ export function HomeScreen() {
     return { daysLeft, totalDays, elapsed: totalDays - daysLeft };
   }, [period, today]);
 
-  const cashSlices = useMemo(
-    () => buildSlices(txs.filter(t => t.type === 'expense' && t.pay === '現金'),  CASH_COLORS),
-    [txs],
-  );
-  const cardSlices = useMemo(
-    () => buildSlices(txs.filter(t => t.type === 'expense' && t.pay === '信用卡'), CARD_COLORS),
-    [txs],
-  );
 
   // ── 今日餐費 ──
   const todayStr = useMemo(() => {
@@ -208,27 +164,35 @@ export function HomeScreen() {
         return { name, spent, budget, pct: Math.min(999, Math.round((spent / budget) * 100)) };
       }),
       upcomingRecurring,
+      largestExpense: (() => {
+        const allExp = txs.filter(t => t.type === 'expense');
+        const top    = allExp.reduce<Transaction | null>((m, t) => (!m || t.amount > m.amount) ? t : m, null);
+        if (!top) return undefined;
+        return { note: top.note?.trim() || normalizeCategory(top.cat), amount: top.amount, category: normalizeCategory(top.cat) };
+      })(),
+      largestMealExpense: (() => {
+        const meals = txs.filter(t => t.type === 'expense' && normalizeCategory(t.cat) === '餐費');
+        const top   = meals.reduce<Transaction | null>((m, t) => (!m || t.amount > m.amount) ? t : m, null);
+        if (!top) return undefined;
+        return { note: top.note?.trim() || '餐費', amount: top.amount };
+      })(),
     };
   }, [todayMealExp, periodMealExp, settings.mealPeriodBudget, settings.monthlyCategoryBudgets,
-      totalDays, daysLeft, lifeExp, totalLifeExp, lifeBudgetTotal, upcomingRecurring]);
+      totalDays, daysLeft, lifeExp, totalLifeExp, lifeBudgetTotal, upcomingRecurring, txs]);
 
   // ── Modal 狀態 ──
   const [showAddModal,     setShowAddModal]     = useState(false);
   const [showSavingsModal, setShowSavingsModal] = useState(false);
   const [deleteTargetId,   setDeleteTargetId]   = useState<number | null>(null);
-  const [addType,      setAddType]      = useState<'expense' | 'income'>('expense');
-  const [addPay,       setAddPay]       = useState<'現金' | '信用卡'>('現金');
-  const [addCat,       setAddCat]       = useState('餐費');
-  const [addAmt,       setAddAmt]       = useState('');
-  const [addNote,      setAddNote]      = useState('');
-  const [selectedDate, setSelectedDate] = useState(new Date());
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [savingsInput, setSavingsInput] = useState('');
+  const [addInitialType, setAddInitialType] = useState<'expense' | 'income'>('expense');
+  const [savingsInput,     setSavingsInput]     = useState('');
+  const [savingsKbHeight, setSavingsKbHeight] = useState(0);
   const [toast,    setToast]    = useState('');
   const [reminderBills, setReminderBills] = useState<Bill[] | null>(null);
 
   // ── 投資 Modal 狀態 ──
-  const [showInvestmentModal, setShowInvestmentModal] = useState(false);
+  const [showInvestmentModal,       setShowInvestmentModal]       = useState(false);
+  const [investmentKeyboardHeight,  setInvestmentKeyboardHeight]  = useState(0);
   const [investmentView, setInvestmentView] = useState<'list' | 'form'>('list');
   const [editingStockId,     setEditingStockId]     = useState<number | null>(null);
   const [stockSymbol,        setStockSymbol]        = useState('');
@@ -240,7 +204,8 @@ export function HomeScreen() {
   const [stockMarket,        setStockMarket]        = useState<'TW' | 'US'>('TW');
   const [isFetchingPrice,    setIsFetchingPrice]    = useState(false);
   const [deleteStockTargetId, setDeleteStockTargetId] = useState<number | null>(null);
-  const [mealAlert, setMealAlert] = useState<BubbleAlert | null>(null);
+  const [mealAlert,    setMealAlert]    = useState<BubbleAlert | null>(null);
+  const [afterRecord,  setAfterRecord]  = useState<string | null>(null);
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showToast  = useCallback((msg: string) => {
@@ -248,6 +213,34 @@ export function HomeScreen() {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(''), 2500);
   }, []);
+
+  // 存款 Modal 鍵盤高度監聽
+  useEffect(() => {
+    if (!showSavingsModal) { setSavingsKbHeight(0); return; }
+    const showSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      (e) => setSavingsKbHeight(e.endCoordinates.height),
+    );
+    const hideSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => setSavingsKbHeight(0),
+    );
+    return () => { showSub.remove(); hideSub.remove(); };
+  }, [showSavingsModal]);
+
+  // 投資 Modal 鍵盤高度監聽
+  useEffect(() => {
+    if (!showInvestmentModal) { setInvestmentKeyboardHeight(0); return; }
+    const showSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      (e) => setInvestmentKeyboardHeight(e.endCoordinates.height),
+    );
+    const hideSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => setInvestmentKeyboardHeight(0),
+    );
+    return () => { showSub.remove(); hideSub.remove(); };
+  }, [showInvestmentModal]);
 
   useEffect(() => {
     const msg = checkPeriodRollover();
@@ -257,77 +250,129 @@ export function HomeScreen() {
   }, []);
 
   const openAddModal = useCallback((type: 'expense' | 'income' = 'expense') => {
-    setAddType(type); setAddPay('現金');
-    setSelectedDate(new Date());
-    setAddAmt(''); setAddNote('');
-    setAddCat(type === 'expense' ? '餐費' : '薪資');
+    setAddInitialType(type);
     setShowAddModal(true);
   }, []);
 
-  const handleAddTx = useCallback(() => {
-    const amount = parseFloat(addAmt);
-    if (!amount || amount <= 0) { showToast('❌ 請輸入有效金額'); return; }
-    const now = new Date();
-    const d = selectedDate;
-    const dateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const handleAddTx = useCallback((tx: AddTransactionInput) => {
     addTransaction({
-      type:   addType,
-      cat:    addCat as Transaction['cat'],
-      amount,
-      date:   dateStr,
-      time:   `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`,
-      pay:    addType === 'expense' ? addPay : '—',
-      note:   addNote.trim(),
+      type:   tx.type,
+      cat:    tx.cat as Transaction['cat'],
+      amount: tx.amount,
+      date:   tx.date,
+      time:   tx.time,
+      pay:    tx.pay,
+      note:   tx.note,
     });
     setShowAddModal(false);
-    setAddAmt(''); setAddNote('');
-    showToast(`✅ ${addType === 'expense' ? (addPay === '信用卡' ? '💳 刷卡' : '💵 現金') + '記帳' : '💵 收入'}成功`);
+    showToast(`✅ ${tx.type === 'expense' ? (tx.pay === '信用卡' ? '💳 刷卡' : '💵 現金') + '記帳' : '💵 收入'}成功`);
 
-    // ── 大額餐費提醒 ──
-    if (addType === 'expense' && normalizeCategory(addCat) === '餐費' && amount > 0) {
+    // ── 大額餐費提醒 + 記帳後回饋 ──
+    if (tx.type === 'expense') {
+      const normCat             = normalizeCategory(tx.cat);
+      const catGroup            = getCatGroup(normCat);
       const monthlyMealBudget   = settings.mealPeriodBudget || 9000;
-      const currentMealSpent    = txs
-        .filter(t => t.type === 'expense' && normalizeCategory(t.cat) === '餐費')
-        .reduce((s, t) => s + t.amount, 0);
-      const mealSpentThisCycle  = currentMealSpent + amount;
-      const remainingMealBudget = Math.max(0, monthlyMealBudget - mealSpentThisCycle);
-      const mealImpactRate      = amount / (monthlyMealBudget || 1);
       const baseDailyMealBudget = monthlyMealBudget / (totalDays || 1);
-      const remainingDailyAvg   = daysLeft > 0 ? remainingMealBudget / daysLeft : 0;
-      const isLargeMeal         = amount >= baseDailyMealBudget * 2 || mealImpactRate >= 0.1;
+      const amount              = tx.amount;
+      const dateStr             = tx.date;
 
-      if (isLargeMeal) {
-        const pct    = (mealImpactRate * 100).toFixed(1);
-        const remFmt = `NT$${Math.round(remainingMealBudget).toLocaleString('zh-TW')}`;
-        const avgFmt = `NT$${Math.round(remainingDailyAvg).toLocaleString('zh-TW')}`;
+      let mealAlertFired = false;
 
-        let message: string;
-        let tone: BubbleAlert['tone'];
-        if (remainingDailyAvg >= baseDailyMealBudget * 0.8) {
-          message = `這餐比較豐盛，不過還很安全，後面幾天稍微穩一點就好。`;
-          tone    = 'info';
-        } else if (remainingDailyAvg >= baseDailyMealBudget * 0.5) {
-          message = `這餐用了本期餐費的 ${pct}%，聚餐偶爾會發生，接下來幾天稍微收一收就好。`;
-          tone    = 'warning';
-        } else {
-          message = `這餐花了不少，剩餘日均只剩 ${avgFmt}，接下來要收斂一點。`;
-          tone    = 'danger';
+      if (catGroup === 'daily' && amount > 0) {
+        const currentMealSpent    = financeSummary.mealPeriodSpent;
+        const mealSpentThisCycle  = currentMealSpent + amount;
+        const remainingMealBudget = Math.max(0, monthlyMealBudget - mealSpentThisCycle);
+        const mealImpactRate      = amount / (monthlyMealBudget || 1);
+        const remainingDailyAvg   = daysLeft > 0 ? remainingMealBudget / daysLeft : 0;
+        const isLargeMeal         = amount >= baseDailyMealBudget * 2 || mealImpactRate >= 0.1;
+
+        if (isLargeMeal) {
+          const pct    = (mealImpactRate * 100).toFixed(1);
+          const remFmt = `NT$${Math.round(remainingMealBudget).toLocaleString('zh-TW')}`;
+          const avgFmt = `NT$${Math.round(remainingDailyAvg).toLocaleString('zh-TW')}`;
+
+          let message: string;
+          let tone: BubbleAlert['tone'];
+          if (remainingDailyAvg >= baseDailyMealBudget * 0.8) {
+            message = `這餐比較豐盛，不過還很安全，後面幾天稍微穩一點就好。`;
+            tone    = 'info';
+          } else if (remainingDailyAvg >= baseDailyMealBudget * 0.5) {
+            message = `這餐用了本期餐費的 ${pct}%，聚餐偶爾會發生，接下來幾天稍微收一收就好。`;
+            tone    = 'warning';
+          } else {
+            message = `這餐花了不少，剩餘日均只剩 ${avgFmt}，接下來要收斂一點。`;
+            tone    = 'danger';
+          }
+
+          setTimeout(() => setMealAlert({
+            title: '🍜 餐費提醒',
+            message, tone,
+            stats: [
+              { label: '這餐佔比', value: `${pct}%` },
+              { label: '本期剩餘', value: remFmt },
+              { label: '每日平均', value: avgFmt },
+            ],
+          }), 400);
+          mealAlertFired = true;
+        }
+      }
+
+      if (!mealAlertFired) {
+        let feedback: string | null = null;
+        const isTodayTx = dateStr === todayStr;
+
+        if (catGroup === 'daily') {
+          const mealAllowance    = financeSummary.todayMealAllowance;
+          const newTodayMeal     = isTodayTx ? financeSummary.todayMealSpent + amount : financeSummary.todayMealSpent;
+          const remain           = Math.max(0, mealAllowance - newTodayMeal);
+          const pct              = newTodayMeal / (mealAllowance || 1);
+          const isNewLargestMeal = amount > (financeSummary.largestMealExpense?.amount ?? 0);
+
+          if (isNewLargestMeal) {
+            feedback = `這筆是本期目前最大餐費，這個月不要太常這樣就可以了。`;
+          } else if (!isTodayTx) {
+            const newPeriodPct = Math.round((financeSummary.mealPeriodSpent + amount) / (monthlyMealBudget || 1) * 100);
+            feedback = `已記餐費 ${fmt(amount)}，本期餐費累計 ${newPeriodPct}%。`;
+          } else if (pct > 1) {
+            feedback = `這餐比較豐盛，今天餐費會超過建議值，接下來幾天穩一點就好。`;
+          } else if (pct >= 0.8) {
+            feedback = `已記餐費 ${fmt(amount)}，今天快接近建議值了。`;
+          } else {
+            feedback = `已記餐費 ${fmt(amount)}，今天還能吃 ${fmt(remain)}。`;
+          }
+
+        } else if (catGroup === 'monthly') {
+          const catInfo = financeSummary.categoryBudgets.find(c => c.name === normCat);
+          if (catInfo) {
+            const newSpent = catInfo.spent + amount;
+            const newPct   = Math.min(999, Math.round((newSpent / (catInfo.budget || 1)) * 100));
+            if (newPct >= 90) {
+              feedback = `${normCat}已經用了 ${newPct}%，這個月可以先放慢一點。`;
+            } else if (newPct >= 70) {
+              feedback = `已記${normCat} ${fmt(amount)}，目前用了 ${newPct}%，這個月稍微留意一下。`;
+            } else {
+              feedback = `已記${normCat} ${fmt(amount)}，目前用了 ${newPct}%，還在可控範圍。`;
+            }
+          }
+
+        } else if (catGroup === 'indep') {
+          const isNewLargest = amount > (financeSummary.largestExpense?.amount ?? 0);
+          if (isNewLargest && amount > 500) {
+            feedback = `這筆是本期目前最大支出：${normCat} ${fmt(amount)}，我幫你標記起來。`;
+          } else if (normCat === '貸款') {
+            feedback = `已記貸款 ${fmt(amount)}，這筆放在獨立統計，不影響生活預算。`;
+          } else if (normCat === '投資') {
+            feedback = `已記投資 ${fmt(amount)}，這筆放在投資統計，不影響生活預算。`;
+          } else {
+            feedback = `已記${normCat} ${fmt(amount)}，這筆不影響今日餐費與生活預算。`;
+          }
         }
 
-        const alert: BubbleAlert = {
-          title:   '🍜 餐費提醒',
-          message,
-          tone,
-          stats: [
-            { label: '這餐佔比',   value: `${pct}%` },
-            { label: '本月剩餘',   value: remFmt },
-            { label: '每日平均',   value: avgFmt },
-          ],
-        };
-        setTimeout(() => setMealAlert(alert), 400);
+        if (feedback) setTimeout(() => setAfterRecord(feedback), 400);
       }
     }
-  }, [addAmt, addType, addCat, selectedDate, addPay, addNote, settings.mealPeriodBudget, totalDays, daysLeft, txs]);
+  }, [addTransaction, showToast, settings.mealPeriodBudget,
+      totalDays, daysLeft, financeSummary, todayStr]);
 
   // ── 投資摘要 ──
   const investmentSummary = useMemo(() => {
@@ -402,13 +447,39 @@ export function HomeScreen() {
     setInvestmentView('list');
   }, [stockSymbol, stockName, stockShares, stockInvestedAmt, stockCurrentPrice, stockCurrency, stockMarket, editingStockId]);
 
+  // ── 本期花最多前三類 ──
+  const topExpenses = useMemo(() => {
+    const catMap: Record<string, number> = {};
+    txs.filter(t => t.type === 'expense').forEach(t => {
+      const n = normalizeCategory(t.cat);
+      catMap[n] = (catMap[n] ?? 0) + t.amount;
+    });
+    return Object.entries(catMap)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([cat, amount]) => ({ cat, amount }));
+  }, [txs]);
+
+  // ── 明細篩選 ──
+  const [txFilter, setTxFilter] = useState<'全部' | '餐費' | '生活' | '獨立' | '信用卡'>('全部');
+
+  const filteredTxs = useMemo(() => {
+    switch (txFilter) {
+      case '餐費':   return txs.filter(t => t.type === 'expense' && normalizeCategory(t.cat) === '餐費');
+      case '生活':   return txs.filter(t => t.type === 'expense' && ['食材採購','日用品','娛樂'].includes(normalizeCategory(t.cat)));
+      case '獨立':   return txs.filter(t => t.type === 'expense' && getCatGroup(normalizeCategory(t.cat)) === 'indep');
+      case '信用卡': return txs.filter(t => t.pay === '信用卡');
+      default:       return txs;
+    }
+  }, [txs, txFilter]);
+
   // 明細群組
   const groupedEntries = useMemo(() => {
-    const grouped = txs.reduce<Record<string, Transaction[]>>((m, t) => {
+    const grouped = filteredTxs.reduce<Record<string, Transaction[]>>((m, t) => {
       (m[t.date] = m[t.date] ?? []).push(t); return m;
     }, {});
     return Object.entries(grouped).sort((a, b) => b[0].localeCompare(a[0]));
-  }, [txs]);
+  }, [filteredTxs]);
 
   // 問候語 & 日期標頭（只依賴 today，不需隨 txs 重算）
   const { greeting, headerDate } = useMemo(() => {
@@ -428,16 +499,27 @@ export function HomeScreen() {
 
   // ── 動態玻璃厚度：有背景圖時加厚白霧，強化文字可讀性 ──
   const hasBg           = !!bgSettings.fileUri;
-  const dynamicGlassTop = hasBg ? 'rgba(255,255,255,0.78)' : 'rgba(255,255,255,0.40)';
+  const dynamicGlassTop = hasBg ? 'rgba(255,255,255,0.76)' : 'rgba(255,255,255,0.42)';
 
-  // ── 文字顏色 & 陰影（依 textMode 切換）──
+  // ── 卡片內文字：固定深色系，不受 textMode 影響 ──
+  // 卡片有白霧玻璃底，深色文字可讀性最佳
+  const dynPrimary   = '#1E293B';
+  const dynSecondary = '#475569';
+  const dynMuted     = '#94A3B8';
+  // dynShadow / dynShadowHeavy 在卡片內不需要，保留空物件相容舊引用
+  const dynShadow      = {} as const;
+  const dynShadowHeavy = {} as const;
+
+  // ── Header 專用：跟隨 textMode（歡迎詞文字顏色）──
   const isLight = bgSettings.textMode === 'light';
-  // 淺色文字模式（背景深）→ 白色光暈陰影；深色文字模式 → 黑色投影
-  const dynShadow = isLight ? textShadows.lightOnDark : textShadows.light;
-  const dynShadowHeavy = isLight ? textShadows.lightOnDark : textShadows.heavy;
-  const dynPrimary   = hasBg ? '#1E293B'                : isLight ? '#FFFFFF'                : colors.textPrimary;
-  const dynSecondary = hasBg ? 'rgba(51,65,85,0.86)'   : isLight ? 'rgba(255,255,255,0.85)' : colors.textSecondary;
-  const dynMuted     = hasBg ? 'rgba(71,85,105,0.72)'  : isLight ? 'rgba(255,255,255,0.65)' : colors.textMuted;
+  const hdrColor     = isLight ? '#FFFFFF'               : '#1E293B';
+  const hdrDateColor = isLight ? 'rgba(255,255,255,0.86)' : 'rgba(30,41,59,0.72)';
+  // 深色文字 → 白色輕陰影（不用黑色重陰影）；淺色文字 → 深色柔陰影
+  const hdrShadow = isLight
+    ? { textShadowColor: 'rgba(15,23,42,0.45)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 4 }
+    : { textShadowColor: 'rgba(255,255,255,0.35)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 1 };
+  const hdrChipBg     = isLight ? 'rgba(15,23,42,0.28)'    : 'rgba(255,255,255,0.72)';
+  const hdrChipBorder = isLight ? 'rgba(255,255,255,0.28)'  : 'rgba(255,255,255,0.90)';
 
   return (
     <SafeAreaView style={styles.root}>
@@ -473,15 +555,13 @@ export function HomeScreen() {
         ══════════════════════════════════ */}
         <View style={styles.header}>
           <View style={styles.headerLeft}>
-            <View style={hasBg ? styles.headerTextScrim : undefined}>
-              <Text style={[styles.headerDate, { color: dynSecondary }, dynShadow]}>{headerDate}</Text>
-              <Text style={[styles.headerGreeting, { color: dynPrimary }, dynShadowHeavy]} numberOfLines={2}>
-                你好，{settings.username}！{greeting}
-              </Text>
-              <View style={styles.periodBadge}>
-                <View style={styles.periodDot} />
-                <Text style={[styles.periodLabel, { color: dynPrimary }, dynShadow]}>本期 {period.label}</Text>
-              </View>
+            <Text style={[styles.headerDate, { color: hdrDateColor }, hdrShadow]}>{headerDate}</Text>
+            <Text style={[styles.headerGreeting, { color: hdrColor }, hdrShadow]} numberOfLines={2}>
+              你好，{settings.username}！{greeting}
+            </Text>
+            <View style={[styles.periodBadge, { backgroundColor: hdrChipBg, borderColor: hdrChipBorder }]}>
+              <View style={styles.periodDot} />
+              <Text style={[styles.periodLabel, { color: hdrColor }]}>本期 {period.label}</Text>
             </View>
           </View>
           <Image
@@ -493,68 +573,8 @@ export function HomeScreen() {
         </View>
 
         {/* ══════════════════════════════════
-            四宮格摘要卡片
+            當前存款主卡
         ══════════════════════════════════ */}
-        <View style={styles.gridWrapper}>
-
-          {/* ── 1. 現金支出 (粉紅光暈) ── */}
-          <NeuCard glow={glows.pinkGlow} glowColor="rgba(244,114,182,0.13)" colorTop={dynamicGlassTop}>
-            <View style={styles.sumIconBox}>
-              <Feather name="shopping-bag" size={26} color={colors.expense} />
-            </View>
-            <View style={styles.sumTextCol}>
-              <Text style={[styles.sumLabel, { color: dynMuted }]}>現金支出</Text>
-              <Text style={[styles.sumVal, { color: colors.expense }, dynShadowHeavy]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
-                {fmt(cashExp)}
-              </Text>
-            </View>
-          </NeuCard>
-
-          {/* ── 2. 上期結餘 (薄荷綠光暈) ── */}
-          <NeuCard glow={glows.mintGlow} glowColor="rgba(52,211,153,0.13)" colorTop={dynamicGlassTop}>
-            <View style={styles.sumIconBox}>
-              <Feather name="calendar" size={26} color={colors.income} />
-            </View>
-            <View style={styles.sumTextCol}>
-              <Text style={[styles.sumLabel, { color: dynMuted }]}>上期結餘</Text>
-              <Text style={[styles.sumVal, { color: prevBal >= 0 ? colors.income : colors.expense }, dynShadowHeavy]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
-                {fmt(prevBal)}
-              </Text>
-            </View>
-          </NeuCard>
-
-          {/* ── 3. 信用卡刷卡 (天空藍光暈) ── */}
-          <NeuCard glow={glows.cyanGlow} glowColor="rgba(56,189,248,0.13)" colorTop={dynamicGlassTop}>
-            <View style={styles.sumIconBox}>
-              <Feather name="credit-card" size={26} color={colors.credit} />
-            </View>
-            <View style={styles.sumTextCol}>
-              <Text style={[styles.sumLabel, { color: dynMuted }]}>信用卡刷卡</Text>
-              <Text style={[styles.sumVal, { color: colors.credit }, dynShadowHeavy]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
-                {fmt(cardExp)}
-              </Text>
-            </View>
-          </NeuCard>
-
-          {/* ── 4. 本期結餘 (薰衣草紫光暈) ── */}
-          <NeuCard glow={glows.purpleGlow} glowColor="rgba(167,139,250,0.13)" colorTop={dynamicGlassTop}>
-            <View style={styles.sumIconBox}>
-              <Feather name="trending-up" size={26} color={colors.savings} />
-            </View>
-            <View style={styles.sumTextCol}>
-              <Text style={[styles.sumLabel, { color: dynMuted }]}>本期結餘</Text>
-              <Text style={[styles.sumVal, { color: balance >= 0 ? colors.savings : colors.expense }, dynShadowHeavy]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
-                {fmt(balance)}
-              </Text>
-            </View>
-          </NeuCard>
-
-        </View>
-
-        {/* ══════════════════════════════════
-            存款橫幅（動態流體漸層）
-        ══════════════════════════════════ */}
-        {/* 存款橫幅（淺薰衣草 GlassCard）*/}
         <Pressable
           onPress={() => { setSavingsInput(String(settings.savings)); setShowSavingsModal(true); }}
           style={styles.savingsBannerWrap}
@@ -582,6 +602,131 @@ export function HomeScreen() {
         </Pressable>
 
         {/* ══════════════════════════════════
+            本期現金流摘要
+        ══════════════════════════════════ */}
+        <Card style={styles.cashflowCard} colorTop={dynamicGlassTop}>
+          <View style={styles.cashflowTitleRow}>
+            <Text style={[styles.cashflowTitle, { color: dynPrimary }]}>本期現金流</Text>
+            <Text style={[styles.cashflowPeriod, { color: dynMuted }]}>第 {elapsed}/{totalDays} 天</Text>
+          </View>
+          <View style={styles.cashflowRowItem}>
+            <View style={styles.cashflowLabelGroup}>
+              <Feather name="shopping-bag" size={14} color="#DB4F91" />
+              <Text style={styles.cashflowLabel}>現金支出</Text>
+            </View>
+            <Text style={[styles.cashflowValue, { color: '#DB4F91' }]}>{fmt(cashExp)}</Text>
+          </View>
+          <View style={styles.cashflowRowItem}>
+            <View style={styles.cashflowLabelGroup}>
+              <Feather name="credit-card" size={14} color="#0284C7" />
+              <Text style={styles.cashflowLabel}>信用卡刷卡</Text>
+            </View>
+            <Text style={[styles.cashflowValue, { color: '#0284C7' }]}>{fmt(cardExp)}</Text>
+          </View>
+          <View style={[styles.cashflowRowItem, styles.cashflowDivider]}>
+            <View style={styles.cashflowLabelGroup}>
+              <Feather name="trending-up" size={14} color={balance >= 0 ? '#10B981' : '#DB4F91'} />
+              <Text style={styles.cashflowLabel}>本期結餘</Text>
+            </View>
+            <Text style={[styles.cashflowValue, { color: balance >= 0 ? '#10B981' : '#DB4F91' }]}>{fmt(balance)}</Text>
+          </View>
+          {prevBal !== 0 && (
+            <Text style={[styles.cashflowSub, { color: dynMuted }]}>上期結餘 {fmt(prevBal)}</Text>
+          )}
+        </Card>
+
+        {/* ══════════════════════════════════
+            今日餐費
+        ══════════════════════════════════ */}
+        <Card style={styles.progressCard} colorTop={dynamicGlassTop}>
+          {(() => {
+            const mealDailyLimit  = Math.round((settings.mealPeriodBudget || 9000) / (totalDays || 1));
+            const remain          = Math.max(0, mealDailyLimit - todayMealExp);
+            const pct             = Math.min(100, Math.round((todayMealExp / (mealDailyLimit || 1)) * 100));
+            const barColor        = pct > 85 ? colors.expense : pct > 60 ? colors.neutral : colors.income;
+            const mealBudget      = settings.mealPeriodBudget || 9000;
+            const periodMealPct   = Math.round((periodMealExp / mealBudget) * 100);
+            const isOverBudget    = periodMealExp > mealBudget;
+            const periodRemaining = Math.max(0, mealBudget - periodMealExp);
+            const periodDailyAvg  = daysLeft > 0 ? Math.round(periodRemaining / daysLeft) : 0;
+            return (
+              <>
+                <View style={styles.progressTop}>
+                  <Text style={[styles.progressTitle, { color: dynPrimary }]}>🍽️ 今日餐費</Text>
+                  <Text style={[styles.progressMeta, { color: dynSecondary }]}>{fmt(todayMealExp)} / {fmt(mealDailyLimit)}</Text>
+                </View>
+                <InsetBox style={styles.progressTrack}>
+                  <View style={[styles.progressFill, { width: `${pct}%` as any, backgroundColor: barColor }]} />
+                </InsetBox>
+                <Text style={[styles.progressMeta, { color: pct >= 100 ? colors.expense : remain > 0 ? dynSecondary : colors.expense }]}>
+                  {pct >= 100
+                    ? '今天餐費會超過建議值，接下來幾天稍微穩一點'
+                    : remain > 0
+                      ? `今日還能吃 ${fmt(remain)}`
+                      : '今日餐費已達建議上限'}
+                </Text>
+                <View style={{ marginTop: 10, paddingTop: 8, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(0,0,0,0.07)' }}>
+                  <View style={styles.progressBottom}>
+                    <Text style={[styles.progressMeta, { color: dynMuted, fontSize: 12 }]}>
+                      本期餐費 {fmt(periodMealExp)} / {fmt(mealBudget)} · {Math.min(100, periodMealPct)}%
+                    </Text>
+                  </View>
+                  {isOverBudget ? (
+                    <Text style={[styles.progressMeta, { color: colors.expense, fontSize: 12, marginTop: 4 }]}>
+                      本期餐費已超過 {fmt(periodMealExp - mealBudget)}，後面幾天抓穩一點就好
+                    </Text>
+                  ) : daysLeft > 0 ? (
+                    <Text style={[styles.progressMeta, { color: colors.income, fontSize: 12, marginTop: 4 }]}>
+                      本期餐費還有 {fmt(periodRemaining)}，剩餘日均約 {fmt(periodDailyAvg)}
+                    </Text>
+                  ) : null}
+                </View>
+              </>
+            );
+          })()}
+        </Card>
+
+        {/* ══════════════════════════════════
+            本期生活預算
+        ══════════════════════════════════ */}
+        <Card style={[styles.progressCard, { marginTop: 0 }]} colorTop={dynamicGlassTop}>
+          <View style={[styles.progressTop, { marginBottom: 12 }]}>
+            <Text style={[styles.progressTitle, { color: dynPrimary }]}>本期生活預算</Text>
+            <Text style={[styles.progressMeta, { color: dynSecondary }]}>剩 {daysLeft} 天</Text>
+          </View>
+          {LIFE_CATS.map(cat => {
+            const used      = lifeExp[cat];
+            const catBudget = settings.monthlyCategoryBudgets[cat] || 1;
+            const rawPct    = Math.round((used / catBudget) * 100);
+            const barPct    = Math.min(100, rawPct);
+            const isOver    = used > catBudget;
+            const barColor  = isOver ? colors.expense : rawPct > 60 ? colors.neutral : colors.income;
+            return (
+              <View key={cat} style={{ marginBottom: 10 }}>
+                <View style={styles.progressBottom}>
+                  <Text style={[styles.progressMeta, { color: dynSecondary }]}>{cat}</Text>
+                  <Text style={[styles.progressMeta, { color: isOver ? colors.expense : dynSecondary }]}>
+                    {fmt(used)} / {fmt(catBudget)}
+                  </Text>
+                </View>
+                <InsetBox style={[styles.progressTrack, { marginBottom: 0, marginTop: 4 }]}>
+                  <View style={[styles.progressFill, { width: `${barPct}%` as any, backgroundColor: barColor }]} />
+                </InsetBox>
+                {isOver && (
+                  <Text style={[styles.progressMeta, { color: colors.expense, fontSize: 12, marginTop: 3 }]}>
+                    已超出 {fmt(used - catBudget)}
+                  </Text>
+                )}
+              </View>
+            );
+          })}
+          <View style={[styles.progressBottom, { marginTop: 6 }]}>
+            <Text style={[styles.progressMeta, { color: dynMuted }]}>合計已用 {fmt(totalLifeExp)}</Text>
+            <Text style={[styles.progressMeta, { color: dynMuted }]}>預算 {fmt(lifeBudgetTotal)}</Text>
+          </View>
+        </Card>
+
+        {/* ══════════════════════════════════
             投資資產卡
         ══════════════════════════════════ */}
         <Pressable
@@ -596,7 +741,6 @@ export function HomeScreen() {
                 ? 'rgba(52,211,153,0.16)'
                 : 'rgba(244,114,182,0.16)'
             }
-
             borderRadius={radius.xl}
           >
             {stockHoldings.length === 0 ? (
@@ -641,117 +785,54 @@ export function HomeScreen() {
         </Pressable>
 
         {/* ══════════════════════════════════
-            今日餐費
+            本期花最多前三類
         ══════════════════════════════════ */}
-        <Card style={styles.progressCard} colorTop={dynamicGlassTop}>
-          {(() => {
-            const mealDailyLimit = Math.round((settings.mealPeriodBudget || 9000) / (totalDays || 1));
-            const remain         = Math.max(0, mealDailyLimit - todayMealExp);
-            const pct            = Math.min(100, Math.round((todayMealExp / (mealDailyLimit || 1)) * 100));
-            const barColor       = pct > 85 ? colors.expense : pct > 60 ? colors.neutral : colors.income;
-            const mealBudget     = settings.mealPeriodBudget || 9000;
-            const periodMealPct  = Math.min(100, Math.round((periodMealExp / mealBudget) * 100));
-            const periodRemaining = Math.max(0, mealBudget - periodMealExp);
-            const periodDailyAvg = daysLeft > 0 ? Math.round(periodRemaining / daysLeft) : 0;
-            return (
-              <>
-                <View style={styles.progressTop}>
-                  <Text style={[styles.progressTitle, { color: dynPrimary }]}>🍽️ 今日餐費</Text>
-                  <Text style={[styles.progressMeta, { color: dynSecondary }]}>{fmt(todayMealExp)} / {fmt(mealDailyLimit)}</Text>
-                </View>
-                <InsetBox style={styles.progressTrack}>
-                  <View style={[styles.progressFill, { width: `${pct}%` as any, backgroundColor: barColor }]} />
-                </InsetBox>
-                <Text style={[styles.progressMeta, { color: remain > 0 ? dynSecondary : colors.expense }]}>
-                  {remain > 0 ? `今日還能吃 NT$${remain.toLocaleString('zh-TW')}` : '今日餐費已達建議上限'}
-                </Text>
-                <View style={[styles.progressBottom, { marginTop: 8 }]}>
-                  <Text style={[styles.progressMeta, { color: dynMuted, fontSize: 12 }]}>
-                    本期餐費 {fmt(periodMealExp)} / {fmt(mealBudget)} · {periodMealPct}%
-                  </Text>
-                  <Text style={[styles.progressMeta, { color: periodMealPct > 85 ? colors.expense : dynMuted, fontSize: 12 }]}>
-                    剩 {fmt(periodRemaining)} · 日均 {fmt(periodDailyAvg)}
-                  </Text>
-                </View>
-              </>
-            );
-          })()}
-        </Card>
+        {topExpenses.length > 0 && (
+          <Card style={styles.topExpCard} colorTop={dynamicGlassTop}>
+            <Text style={[styles.topExpTitle, { color: dynPrimary }]}>本期花最多</Text>
+            {topExpenses.map((e, i) => (
+              <View key={e.cat} style={[styles.topExpRow, i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(0,0,0,0.06)' }]}>
+                <Text style={styles.topExpRank}>{i + 1}</Text>
+                <Text style={styles.topExpCat}>{getCatIcon(e.cat)} {e.cat}</Text>
+                <Text style={[styles.topExpAmt, { color: '#DB4F91' }]}>{fmt(e.amount)}</Text>
+              </View>
+            ))}
+          </Card>
+        )}
 
         {/* ══════════════════════════════════
-            本期生活預算
+            本期明細 + 篩選
         ══════════════════════════════════ */}
-        <Card style={[styles.progressCard, { marginTop: 0 }]} colorTop={dynamicGlassTop}>
-          <View style={[styles.progressTop, { marginBottom: 12 }]}>
-            <Text style={[styles.progressTitle, { color: dynPrimary }]}>本期生活預算（第 {elapsed}/{totalDays} 天）</Text>
-            <Text style={[styles.progressMeta, { color: dynSecondary }]}>剩 {daysLeft} 天</Text>
-          </View>
-          {LIFE_CATS.map(cat => {
-            const used      = lifeExp[cat];
-            const catBudget = settings.monthlyCategoryBudgets[cat] || 1;
-            const pct       = Math.min(100, Math.round((used / catBudget) * 100));
-            const barColor  = pct > 85 ? colors.expense : pct > 60 ? colors.neutral : colors.income;
-            return (
-              <View key={cat} style={{ marginBottom: 10 }}>
-                <View style={styles.progressBottom}>
-                  <Text style={[styles.progressMeta, { color: dynSecondary }]}>{cat}</Text>
-                  <Text style={[styles.progressMeta, { color: pct > 85 ? colors.expense : dynSecondary }]}>
-                    {fmt(used)} / {fmt(catBudget)}
-                  </Text>
-                </View>
-                <InsetBox style={[styles.progressTrack, { marginBottom: 0, marginTop: 4 }]}>
-                  <View style={[styles.progressFill, { width: `${pct}%` as any, backgroundColor: barColor }]} />
-                </InsetBox>
-              </View>
-            );
-          })}
-          <View style={[styles.progressBottom, { marginTop: 6 }]}>
-            <Text style={[styles.progressMeta, { color: dynMuted }]}>合計已用 {fmt(totalLifeExp)}</Text>
-            <Text style={[styles.progressMeta, { color: dynMuted }]}>預算 {fmt(lifeBudgetTotal)}</Text>
-          </View>
-        </Card>
-
-        {/* ══════════════════════════════════
-            雙圓餅圖
-        ══════════════════════════════════ */}
-        <View style={styles.pieRow}>
-          {[
-            { title: '支出分類',   slices: cashSlices, total: cashExp },
-            { title: '信用卡分類', slices: cardSlices, total: cardExp },
-          ].map((p, i) => (
-            <GlassCard key={i} style={styles.pieCard}
-              colorTop={dynamicGlassTop}
-              borderRadius={radius.xl}>
-              {/* 白霧保護底板：隔絕複雜背景，讓圓餅圖色彩穩定（borderRadius 與卡片同步，防 Android 方角殘留）*/}
-              <View style={[StyleSheet.absoluteFill, { borderRadius: radius.xl, overflow: 'hidden', backgroundColor: hasBg ? 'rgba(255,255,255,0.34)' : 'rgba(255,255,255,0.20)' }]} pointerEvents="none" />
-              <Text style={[styles.pieTitle, textShadows.light]}>{p.title}</Text>
-              <View style={styles.pieCenter}>
-                <SkiaPieChart
-                  slices={p.slices}
-                  size={120}
-
-                />
-              </View>
-              <PieLegend items={p.slices.map(s => ({ ...s, total: p.total }))} />
-            </GlassCard>
-          ))}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={[styles.sectionTitle, { color: dynPrimary, paddingHorizontal: 0, marginBottom: 0 }]}>本期明細</Text>
         </View>
-
-        {/* ══════════════════════════════════
-            本期明細
-        ══════════════════════════════════ */}
-        <Text style={[styles.sectionTitle, { color: dynPrimary }]}>本期明細</Text>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filterChipsContainer}
+          style={{ marginBottom: 12 }}
+        >
+          {(['全部', '餐費', '生活', '獨立', '信用卡'] as const).map(f => (
+            <Pressable
+              key={f}
+              style={[styles.filterChip, txFilter === f && styles.filterChipActive]}
+              onPress={() => setTxFilter(f)}
+            >
+              <Text style={[styles.filterChipText, { color: txFilter === f ? '#fff' : dynSecondary }]}>{f}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
         {groupedEntries.length === 0 ? (
-          <Text style={styles.emptyText}>本期尚無記錄</Text>
+          <Text style={styles.emptyText}>
+            {txFilter === '全部' ? '本期尚無記錄' : `本期沒有${txFilter}類明細`}
+          </Text>
         ) : (
           groupedEntries.map(([date, items]) => (
             <View key={date} style={styles.dayGroup}>
-              {/* 日期標籤 */}
               <View style={styles.dayLabelRow}>
                 <Text style={styles.dayLabelText}>{dayLabel(date)}</Text>
               </View>
-              {/* 同日項目收進一個 GlassCard */}
-              <GlassCard style={styles.dayCard} colorTop={hasBg ? 'rgba(255,255,255,0.82)' : 'rgba(255,255,255,0.40)'}>
+              <GlassCard style={styles.dayCard} colorTop={hasBg ? 'rgba(255,255,255,0.86)' : 'rgba(255,255,255,0.44)'}>
                 {items.map((t, idx) => (
                   <View key={t.id}>
                     {idx > 0 && <View style={styles.txDivider} />}
@@ -774,18 +855,20 @@ export function HomeScreen() {
                       <View style={styles.txRight}>
                         <Text style={[
                           styles.txAmount,
-                          { color: t.type === 'income' ? colors.income : colors.expense },
+                          { color: t.type === 'income' ? '#10B981' : '#DB4F91' },
                         ]}>
                           {t.type === 'income' ? '+' : '-'}{fmt(t.amount)}
                         </Text>
                         {t.type === 'expense' && (
                           <View style={[
                             styles.payBadge,
-                            { backgroundColor: t.pay === '信用卡' ? 'rgba(56,189,248,0.15)' : 'rgba(52,211,153,0.15)' },
+                            t.pay === '信用卡'
+                              ? { backgroundColor: 'rgba(2,132,199,0.14)', borderColor: 'rgba(2,132,199,0.24)' }
+                              : { backgroundColor: 'rgba(16,185,129,0.14)', borderColor: 'rgba(16,185,129,0.24)' },
                           ]}>
                             <Text style={[
                               styles.payBadgeText,
-                              { color: t.pay === '信用卡' ? colors.credit : colors.income },
+                              { color: t.pay === '信用卡' ? '#0284C7' : '#059669' },
                             ]}>
                               {t.pay}
                             </Text>
@@ -797,7 +880,9 @@ export function HomeScreen() {
                         style={styles.delBtn}
                         hitSlop={8}
                       >
-                        <Feather name="trash-2" size={16} color="#bbb" />
+                        {({ pressed }: { pressed: boolean }) => (
+                          <Feather name="trash-2" size={16} color={pressed ? '#EC4899' : 'rgba(100,116,139,0.35)'} />
+                        )}
                       </Pressable>
                     </View>
                   </View>
@@ -806,8 +891,6 @@ export function HomeScreen() {
             </View>
           ))
         )}
-
-
 
         <View style={{ height: 120 }} />
       </ScrollView>
@@ -821,6 +904,8 @@ export function HomeScreen() {
         mealAlert={mealAlert}
         onMealAlertShown={() => setMealAlert(null)}
         financeSummary={financeSummary}
+        afterRecord={afterRecord}
+        onAfterRecordShown={() => setAfterRecord(null)}
       />
 
       {/* ── Toast ── */}
@@ -831,169 +916,14 @@ export function HomeScreen() {
       )}
 
       {/* ════════════════════════════════════
-          記帳 Modal
+          記帳 Modal（獨立元件）
       ════════════════════════════════════ */}
-      <Modal
+      <AddTransactionModal
         visible={showAddModal}
-        animationType="slide"
-        transparent
-        onRequestClose={() => {
-          Keyboard.dismiss();
-          setTimeout(() => setShowAddModal(false), 50);
-        }}
-      >
-        <KeyboardAvoidingView
-          behavior="padding"
-          style={{ flex: 1, justifyContent: 'flex-end' }}
-        >
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => {
-            Keyboard.dismiss();
-            setTimeout(() => setShowAddModal(false), 50);
-          }} />
-          <View style={styles.modalBox}>
-            {/* Drag Handle */}
-            <View style={styles.dragHandle} />
-            {/* 類型切換 */}
-            <View style={styles.typeRow}>
-              {(['expense', 'income'] as const).map(type => (
-                <Pressable
-                  key={type}
-                  style={[
-                    styles.typeBtn,
-                    addType === type && {
-                      backgroundColor: type === 'expense' ? 'rgba(255,61,0,0.18)' : 'rgba(0,230,118,0.18)',
-                      borderWidth: 1.5,
-                      borderColor: type === 'expense' ? colors.expense : colors.income,
-                    },
-                  ]}
-                  onPress={() => {
-                    setAddType(type);
-                    setAddCat(type === 'expense' ? '餐費' : '薪資');
-                    setAddPay('現金');
-                  }}
-                >
-                  <Text style={[styles.typeBtnText, { color: type === 'expense' ? colors.expense : colors.income }]}>
-                    {type === 'expense' ? '支出' : '收入'}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-
-            {/* 金額 */}
-            <TextInput
-              style={styles.amtInput}
-              placeholder="金額 NT$"
-              placeholderTextColor="#94A3B8"
-              keyboardType="numeric"
-              value={addAmt}
-              onChangeText={setAddAmt}
-              autoFocus
-            />
-
-            {/* 類別（三組：每日 / 每月 / 獨立統計）*/}
-            {addType === 'expense' ? (
-              <View style={styles.catGroupWrap}>
-                {[
-                  { label: '每日', cats: CAT_GROUPS.daily },
-                  { label: '每月', cats: CAT_GROUPS.monthly },
-                  { label: '獨立統計', cats: CAT_GROUPS.indep },
-                ].map(({ label, cats }) => (
-                  <View key={label} style={styles.catGroupRow}>
-                    <Text style={styles.catGroupLabel}>{label}</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                      <View style={styles.catGroupChips}>
-                        {cats.map(c => (
-                          <Pressable
-                            key={c.n}
-                            style={[styles.catChip, addCat === c.n && styles.catChipActive]}
-                            onPress={() => setAddCat(c.n)}
-                          >
-                            <Text style={styles.catChipText}>{c.e} {c.n}</Text>
-                          </Pressable>
-                        ))}
-                      </View>
-                    </ScrollView>
-                  </View>
-                ))}
-                {/* 提示文字 */}
-                {!!addCat && (
-                  <Text style={styles.catHintText}>{getCatHint(addCat)}</Text>
-                )}
-              </View>
-            ) : (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.catScroll}>
-                {CATS.income.map(c => (
-                  <Pressable
-                    key={c.n}
-                    style={[styles.catChip, addCat === c.n && styles.catChipActive]}
-                    onPress={() => setAddCat(c.n)}
-                  >
-                    <Text style={styles.catChipText}>{c.e} {c.n}</Text>
-                  </Pressable>
-                ))}
-              </ScrollView>
-            )}
-
-            {/* 付款方式 */}
-            {addType === 'expense' && (
-              <View style={styles.payRow}>
-                {(['現金', '信用卡'] as const).map(pay => (
-                  <Pressable
-                    key={pay}
-                    style={[styles.payBtn, addPay === pay && styles.payBtnActive]}
-                    onPress={() => setAddPay(pay)}
-                  >
-                    <Text style={styles.payBtnText}>{pay === '現金' ? '現金' : '信用卡'}</Text>
-                  </Pressable>
-                ))}
-              </View>
-            )}
-
-            {/* 日期選擇器 */}
-            <Pressable style={styles.dateTrigger} onPress={() => setShowDatePicker(true)}>
-              <Feather name="calendar" size={16} color={colors.textSecondary} />
-              <Text style={styles.dateTriggerText}>
-                {`${selectedDate.getFullYear()} / ${String(selectedDate.getMonth()+1).padStart(2,'0')} / ${String(selectedDate.getDate()).padStart(2,'0')}`}
-              </Text>
-              <Feather name="chevron-down" size={14} color={colors.textMuted} />
-            </Pressable>
-
-            {showDatePicker && (
-              <DateTimePicker
-                value={selectedDate}
-                mode="date"
-                display="default"
-                onChange={(_event, date) => {
-                  setShowDatePicker(false);
-                  if (date) setSelectedDate(date);
-                }}
-              />
-            )}
-
-            {/* 備註 */}
-            <TextInput
-              style={styles.noteInput}
-              placeholder="備註（選填）"
-              placeholderTextColor="#94A3B8"
-              value={addNote}
-              onChangeText={setAddNote}
-            />
-
-            {/* 送出 */}
-            <Pressable
-              style={[
-                styles.submitBtn,
-                { backgroundColor: addType === 'expense' ? colors.expense : colors.income },
-              ]}
-              onPress={handleAddTx}
-            >
-              <Text style={styles.submitBtnText}>
-                {addType === 'expense' ? '記帳支出' : '記帳收入'}
-              </Text>
-            </Pressable>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+        initialType={addInitialType}
+        onClose={() => setShowAddModal(false)}
+        onAdd={handleAddTx}
+      />
 
       {/* ════════════════════════════════════
           存款 Modal（Bottom Sheet）
@@ -1002,40 +932,62 @@ export function HomeScreen() {
         visible={showSavingsModal}
         animationType="slide"
         transparent
-        onRequestClose={() => setShowSavingsModal(false)}
+        onRequestClose={() => { Keyboard.dismiss(); setShowSavingsModal(false); }}
       >
-        <KeyboardAvoidingView behavior="padding" style={{ flex: 1, justifyContent: 'flex-end' }}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowSavingsModal(false)} />
-          <View style={styles.modalBox}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={() => { Keyboard.dismiss(); setShowSavingsModal(false); }} />
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={{ flex: 1, justifyContent: 'flex-end' }}
+          pointerEvents="box-none"
+        >
+          <View style={[
+            styles.savingsSheet,
+            Platform.OS === 'android' && savingsKbHeight > 0 && { marginBottom: savingsKbHeight },
+          ]}>
             <View style={styles.dragHandle} />
+
+            {/* 標題 */}
             <View style={styles.modalTitleRow}>
-              <Feather name="dollar-sign" size={18} color={colors.savings} />
-              <Text style={styles.modalTitle}>編輯存款基準</Text>
+              <Feather name="dollar-sign" size={20} color="#8B5CF6" />
+              <Text style={styles.savingsSheetTitle}>編輯存款基準</Text>
             </View>
-            <TextInput
-              style={styles.amtInput}
-              placeholder="NT$"
-              placeholderTextColor="#94A3B8"
-              keyboardType="numeric"
-              value={savingsInput}
-              onChangeText={setSavingsInput}
-              autoFocus
-            />
-            <View style={styles.btnRow}>
-              <Pressable style={styles.cancelBtn} onPress={() => setShowSavingsModal(false)}>
-                <Text style={styles.cancelText}>取消</Text>
+
+            {/* 輸入區 */}
+            <View style={styles.savingsSheetBody}>
+              <Text style={styles.savingsFieldLabel}>存款基準</Text>
+              <TextInput
+                style={styles.savingsInput}
+                placeholder="NT$ 0"
+                placeholderTextColor="#CBD5E1"
+                keyboardType="decimal-pad"
+                value={savingsInput}
+                onChangeText={setSavingsInput}
+              />
+              <Text style={styles.savingsHint}>
+                首頁存款會依照「存款基準 + 本期結餘」自動計算
+              </Text>
+            </View>
+
+            {/* 底部按鈕 */}
+            <View style={styles.savingsFooter}>
+              <Pressable
+                style={styles.savingsCancelBtn}
+                onPress={() => { Keyboard.dismiss(); setShowSavingsModal(false); }}
+              >
+                <Text style={styles.savingsCancelText}>取消</Text>
               </Pressable>
               <Pressable
-                style={[styles.confirmBtn, { backgroundColor: colors.savings }]}
+                style={styles.savingsSaveBtn}
                 onPress={() => {
                   const v = parseFloat(savingsInput);
                   if (isNaN(v) || v < 0) { showToast('❌ 無效金額'); return; }
                   useBudgetStore.getState().updateSavings(v);
+                  Keyboard.dismiss();
                   setShowSavingsModal(false);
                   showToast('🏦 存款已更新');
                 }}
               >
-                <Text style={styles.confirmText}>儲存</Text>
+                <Text style={styles.savingsSaveText}>儲存</Text>
               </Pressable>
             </View>
           </View>
@@ -1106,172 +1058,275 @@ export function HomeScreen() {
         visible={showInvestmentModal}
         animationType="slide"
         transparent
-        onRequestClose={() => { setShowInvestmentModal(false); resetStockForm(); }}
+        onRequestClose={() => { Keyboard.dismiss(); setShowInvestmentModal(false); resetStockForm(); setInvestmentView('list'); }}
       >
-        <KeyboardAvoidingView behavior="padding" style={{ flex: 1, justifyContent: 'flex-end' }}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => { setShowInvestmentModal(false); resetStockForm(); }} />
-          <View style={styles.modalBox}>
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={() => { Keyboard.dismiss(); setShowInvestmentModal(false); resetStockForm(); setInvestmentView('list'); }}
+        />
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={{ flex: 1, justifyContent: 'flex-end' }}
+          pointerEvents="box-none"
+        >
+          <View style={[
+            styles.investmentSheet,
+            investmentView === 'list' ? styles.investmentSheetList : styles.investmentSheetForm,
+            Platform.OS === 'android' && investmentKeyboardHeight > 0 && {
+              marginBottom: investmentKeyboardHeight,
+              height: '58%',
+              minHeight: 360,
+            },
+          ]}>
             <View style={styles.dragHandle} />
 
-            {investmentView === 'list' ? (
-              <>
-                {/* ── 持股列表 ── */}
-                <View style={styles.modalTitleRow}>
-                  <Text style={styles.investmentIcon}>📈</Text>
-                  <Text style={styles.modalTitle}>我的持股</Text>
-                </View>
+            {/* ── 標題列 ── */}
+            <View style={styles.invHeaderRow}>
+              <View style={styles.invTitleGroup}>
+                <Feather
+                  name={investmentView === 'list' ? 'trending-up' : 'bar-chart-2'}
+                  size={20}
+                  color="#8B5CF6"
+                />
+                <Text style={styles.invSheetTitle}>
+                  {investmentView === 'list'
+                    ? '投資資產'
+                    : editingStockId !== null ? '編輯持股' : '新增持股'}
+                </Text>
+              </View>
+              {investmentView === 'form' && (
+                <Pressable
+                  style={styles.invBackBtn}
+                  onPress={() => { resetStockForm(); setInvestmentView('list'); }}
+                >
+                  <Feather name="chevron-left" size={16} color="#64748B" />
+                  <Text style={styles.invBackText}>返回</Text>
+                </Pressable>
+              )}
+            </View>
 
-                {stockHoldings.length === 0 ? (
-                  <View style={styles.stockEmptyBox}>
-                    <Text style={styles.stockEmptyText}>尚未新增持股</Text>
-                    <Text style={styles.stockEmptyHint}>新增股票後，這裡會顯示投資市值與損益。</Text>
-                  </View>
-                ) : (
-                  stockHoldings.map((s) => {
-                    const avgCost     = s.shares > 0 ? s.investedAmount / s.shares : 0;
-                    const marketValue = s.shares * s.currentPrice;
-                    const profit      = marketValue - s.investedAmount;
-                    const rate        = s.investedAmount > 0 ? profit / s.investedAmount : 0;
-                    const profitColor = profit >= 0 ? colors.income : colors.expense;
-                    return (
-                      <View key={s.id} style={styles.stockRow}>
-                        <View style={styles.stockInfo}>
-                          <Text style={styles.stockSymbolName}>
-                            {s.symbol} {s.name}
+            {/* ── 可滾動內容 ── */}
+            <ScrollView
+              style={styles.invBody}
+              contentContainerStyle={[
+                styles.invBodyContent,
+                investmentKeyboardHeight > 0 && { paddingBottom: 160 },
+              ]}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              {investmentView === 'list' ? (
+                <>
+                  {/* 投資摘要卡 */}
+                  {stockHoldings.length > 0 && (
+                    <View style={styles.invSummaryCard}>
+                      <View style={[styles.summaryAccentBar, {
+                        backgroundColor: investmentSummary.unrealizedProfit >= 0 ? '#34D399' : '#F472B6',
+                      }]} />
+                      <View style={styles.invSummaryTop}>
+                        <View>
+                          <Text style={styles.invSummaryLabel}>總市值</Text>
+                          <Text style={styles.invSummaryMain}>
+                            NT${Math.round(investmentSummary.totalMarketValue).toLocaleString('zh-TW')}
                           </Text>
-                          <Text style={styles.stockMeta}>
-                            {s.shares} 股｜投入 NT${Math.round(s.investedAmount).toLocaleString('zh-TW')}
+                        </View>
+                        <View style={{ alignItems: 'flex-end' }}>
+                          <Text style={[styles.invSummaryProfit, {
+                            color: investmentSummary.unrealizedProfit >= 0 ? '#10B981' : '#DB4F91',
+                          }]}>
+                            {investmentSummary.unrealizedProfit >= 0 ? '+' : ''}
+                            NT${Math.round(Math.abs(investmentSummary.unrealizedProfit)).toLocaleString('zh-TW')}
                           </Text>
-                          <Text style={styles.stockMeta}>
-                            現價 {s.currentPrice}｜均價 {avgCost.toFixed(1)}
+                          <Text style={[styles.invSummaryRate, {
+                            color: investmentSummary.returnRate >= 0 ? '#10B981' : '#DB4F91',
+                          }]}>
+                            {investmentSummary.returnRate >= 0 ? '+' : ''}
+                            {(investmentSummary.returnRate * 100).toFixed(1)}%
                           </Text>
-                          <Text style={styles.stockValue}>
-                            市值 NT${Math.round(marketValue).toLocaleString('zh-TW')}
-                          </Text>
-                          <Text style={[styles.stockProfit, { color: profitColor }]}>
+                        </View>
+                      </View>
+                      <Text style={styles.invSummaryInvested}>
+                        投入 NT${Math.round(investmentSummary.totalInvested).toLocaleString('zh-TW')}
+                      </Text>
+                    </View>
+                  )}
+
+                  {/* 持股卡片 */}
+                  {stockHoldings.length === 0 ? (
+                    <View style={styles.invEmptyBox}>
+                      <Text style={{ fontSize: 32 }}>📈</Text>
+                      <Text style={styles.invEmptyTitle}>尚未新增持股</Text>
+                      <Text style={styles.invEmptyHint}>新增股票後，這裡會顯示投資市值與損益。</Text>
+                    </View>
+                  ) : (
+                    stockHoldings.map((s) => {
+                      const avgCost     = s.shares > 0 ? s.investedAmount / s.shares : 0;
+                      const marketValue = s.shares * s.currentPrice;
+                      const profit      = marketValue - s.investedAmount;
+                      const rate        = s.investedAmount > 0 ? profit / s.investedAmount : 0;
+                      const profitColor = profit >= 0 ? '#10B981' : '#DB4F91';
+                      return (
+                        <View key={s.id} style={styles.holdingCard}>
+                          <View style={styles.holdingTopRow}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.holdingTitle}>{s.symbol} {s.name}</Text>
+                              <Text style={styles.holdingMeta}>
+                                持有 {s.shares} 股｜投入 NT${Math.round(s.investedAmount).toLocaleString('zh-TW')}
+                              </Text>
+                              <Text style={styles.holdingMeta}>
+                                現價 {s.currentPrice}｜均價 {avgCost.toFixed(1)}
+                              </Text>
+                              <Text style={styles.holdingValue}>
+                                市值 NT${Math.round(marketValue).toLocaleString('zh-TW')}
+                              </Text>
+                            </View>
+                            <View style={styles.holdingActions}>
+                              <Pressable
+                                onPress={() => startEditStock(s)}
+                                hitSlop={8}
+                                style={styles.holdingActionBtn}
+                              >
+                                <Feather name="edit-2" size={16} color="#64748B" />
+                              </Pressable>
+                              <Pressable
+                                onPress={() => setDeleteStockTargetId(s.id)}
+                                hitSlop={8}
+                                style={styles.holdingActionBtn}
+                              >
+                                <Feather name="trash-2" size={16} color="#DB4F91" />
+                              </Pressable>
+                            </View>
+                          </View>
+                          <Text style={[styles.holdingProfit, { color: profitColor }]}>
                             {profit >= 0 ? '+' : ''}NT${Math.round(Math.abs(profit)).toLocaleString('zh-TW')}
                             {'  '}
                             {rate >= 0 ? '+' : ''}{(rate * 100).toFixed(1)}%
                           </Text>
                         </View>
-                        <View style={styles.stockActions}>
-                          <Pressable onPress={() => startEditStock(s)} hitSlop={8} style={styles.stockActionBtn}>
-                            <Feather name="edit-2" size={17} color={colors.textSecondary} />
-                          </Pressable>
-                          <Pressable onPress={() => setDeleteStockTargetId(s.id)} hitSlop={8} style={styles.stockActionBtn}>
-                            <Feather name="trash-2" size={17} color={colors.expense} />
-                          </Pressable>
-                        </View>
-                      </View>
-                    );
-                  })
-                )}
+                      );
+                    })
+                  )}
+                </>
+              ) : (
+                /* ── 新增 / 編輯表單 ── */
+                <>
+                  <View style={styles.invFormRow}>
+                    <TextInput
+                      style={[styles.invInput, { flex: 1 }]}
+                      placeholder="股票代號（如 2330）"
+                      placeholderTextColor="#CBD5E1"
+                      value={stockSymbol}
+                      onChangeText={setStockSymbol}
+                    />
+                    <TextInput
+                      style={[styles.invInput, { flex: 1.6 }]}
+                      placeholder="股票名稱（如 台積電）"
+                      placeholderTextColor="#CBD5E1"
+                      value={stockName}
+                      onChangeText={setStockName}
+                    />
+                  </View>
 
+                  <View style={styles.invFormRow}>
+                    <TextInput
+                      style={[styles.invInput, { flex: 1 }]}
+                      placeholder="持有股數"
+                      placeholderTextColor="#CBD5E1"
+                      keyboardType="numeric"
+                      value={stockShares}
+                      onChangeText={setStockShares}
+                    />
+                    <TextInput
+                      style={[styles.invInput, { flex: 1.4 }]}
+                      placeholder="投入金額（總計）"
+                      placeholderTextColor="#CBD5E1"
+                      keyboardType="numeric"
+                      value={stockInvestedAmt}
+                      onChangeText={setStockInvestedAmt}
+                    />
+                  </View>
+
+                  {/* 市場選擇 */}
+                  <View style={styles.invToggleRow}>
+                    {([['TW', '台股'], ['US', '美股']] as const).map(([val, label]) => (
+                      <Pressable
+                        key={val}
+                        style={[styles.invToggleBtn, stockMarket === val && styles.invToggleBtnActive]}
+                        onPress={() => setStockMarket(val)}
+                      >
+                        <Text style={[styles.invToggleBtnText, stockMarket === val && { color: '#8B5CF6' }]}>
+                          {label}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+
+                  {/* 現價 + 抓取 */}
+                  <View style={styles.invFormRow}>
+                    <TextInput
+                      style={[styles.invInput, { flex: 1 }]}
+                      placeholder="目前價格"
+                      placeholderTextColor="#CBD5E1"
+                      keyboardType="numeric"
+                      value={stockCurrentPrice}
+                      onChangeText={setStockCurrentPrice}
+                    />
+                    <Pressable
+                      style={[styles.invFetchBtn, isFetchingPrice && { opacity: 0.5 }]}
+                      onPress={handleFetchPrice}
+                      disabled={isFetchingPrice}
+                    >
+                      <Text style={styles.invFetchBtnText}>{isFetchingPrice ? '抓取中…' : '抓取現價'}</Text>
+                    </Pressable>
+                  </View>
+
+                  {/* 幣別 */}
+                  <View style={styles.invToggleRow}>
+                    {(['TWD', 'USD'] as const).map(c => (
+                      <Pressable
+                        key={c}
+                        style={[styles.invToggleBtn, stockCurrency === c && styles.invToggleBtnActive]}
+                        onPress={() => setStockCurrency(c)}
+                      >
+                        <Text style={[styles.invToggleBtnText, stockCurrency === c && { color: '#8B5CF6' }]}>
+                          {c}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </>
+              )}
+            </ScrollView>
+
+            {/* ── 固定底部按鈕 ── */}
+            <View style={[
+              styles.invFooter,
+              Platform.OS === 'android' && investmentKeyboardHeight > 0 && { paddingBottom: 12 },
+            ]}>
+              {investmentView === 'list' ? (
                 <Pressable
-                  style={[styles.submitBtn, { backgroundColor: colors.savings, marginTop: 16 }]}
+                  style={styles.invAddBtn}
                   onPress={() => { resetStockForm(); setInvestmentView('form'); }}
                 >
-                  <Text style={styles.submitBtnText}>＋ 新增股票</Text>
+                  <Feather name="plus-circle" size={18} color="#fff" />
+                  <Text style={styles.invAddBtnText}>新增股票</Text>
                 </Pressable>
-              </>
-            ) : (
-              <>
-                {/* ── 新增 / 編輯表單 ── */}
-                <View style={styles.modalTitleRow}>
-                  <Feather name="bar-chart-2" size={18} color={colors.savings} />
-                  <Text style={styles.modalTitle}>{editingStockId !== null ? '編輯持股' : '新增股票'}</Text>
-                </View>
-
-                <View style={styles.stockFormRow}>
-                  <TextInput
-                    style={[styles.stockInput, { flex: 1 }]}
-                    placeholder="股票代號（如 2330）"
-                    placeholderTextColor="#94A3B8"
-                    value={stockSymbol}
-                    onChangeText={setStockSymbol}
-                  />
-                  <TextInput
-                    style={[styles.stockInput, { flex: 1.6 }]}
-                    placeholder="股票名稱（如 台積電）"
-                    placeholderTextColor="#94A3B8"
-                    value={stockName}
-                    onChangeText={setStockName}
-                  />
-                </View>
-
-                <View style={styles.stockFormRow}>
-                  <TextInput
-                    style={[styles.stockInput, { flex: 1 }]}
-                    placeholder="持有股數"
-                    placeholderTextColor="#94A3B8"
-                    keyboardType="numeric"
-                    value={stockShares}
-                    onChangeText={setStockShares}
-                  />
-                  <TextInput
-                    style={[styles.stockInput, { flex: 1.4 }]}
-                    placeholder="投入金額（總計）"
-                    placeholderTextColor="#94A3B8"
-                    keyboardType="numeric"
-                    value={stockInvestedAmt}
-                    onChangeText={setStockInvestedAmt}
-                  />
-                </View>
-
-                {/* 市場選擇 */}
-                <View style={styles.payRow}>
-                  {([['TW', '台股'], ['US', '美股']] as const).map(([val, label]) => (
-                    <Pressable
-                      key={val}
-                      style={[styles.payBtn, stockMarket === val && styles.payBtnActive]}
-                      onPress={() => setStockMarket(val)}
-                    >
-                      <Text style={styles.payBtnText}>{label}</Text>
-                    </Pressable>
-                  ))}
-                </View>
-
-                {/* 現價：自動抓取 + 手動 fallback */}
-                <View style={styles.stockFormRow}>
-                  <TextInput
-                    style={[styles.stockInput, { flex: 1 }]}
-                    placeholder="目前價格（自動抓取或手動輸入）"
-                    placeholderTextColor="#94A3B8"
-                    keyboardType="numeric"
-                    value={stockCurrentPrice}
-                    onChangeText={setStockCurrentPrice}
-                  />
+              ) : (
+                <View style={{ flexDirection: 'row', gap: 12 }}>
                   <Pressable
-                    style={[styles.payBtn, { flex: 0, paddingHorizontal: 14 }, isFetchingPrice && { opacity: 0.5 }]}
-                    onPress={handleFetchPrice}
-                    disabled={isFetchingPrice}
+                    style={styles.invCancelBtn}
+                    onPress={() => { resetStockForm(); setInvestmentView('list'); }}
                   >
-                    <Text style={styles.payBtnText}>{isFetchingPrice ? '抓取中…' : '抓取現價'}</Text>
+                    <Text style={styles.invCancelText}>取消</Text>
+                  </Pressable>
+                  <Pressable style={styles.invSaveBtn} onPress={handleSaveStock}>
+                    <Text style={styles.invSaveText}>
+                      {editingStockId !== null ? '儲存變更' : '新增股票'}
+                    </Text>
                   </Pressable>
                 </View>
-
-                <View style={styles.payRow}>
-                  {(['TWD', 'USD'] as const).map(c => (
-                    <Pressable
-                      key={c}
-                      style={[styles.payBtn, stockCurrency === c && styles.payBtnActive]}
-                      onPress={() => setStockCurrency(c)}
-                    >
-                      <Text style={styles.payBtnText}>{c}</Text>
-                    </Pressable>
-                  ))}
-                </View>
-
-                <View style={styles.btnRow}>
-                  <Pressable style={styles.cancelBtn} onPress={() => { resetStockForm(); setInvestmentView('list'); }}>
-                    <Text style={styles.cancelText}>取消</Text>
-                  </Pressable>
-                  <Pressable style={[styles.confirmBtn, { backgroundColor: colors.savings }]} onPress={handleSaveStock}>
-                    <Text style={styles.confirmText}>{editingStockId !== null ? '儲存' : '新增'}</Text>
-                  </Pressable>
-                </View>
-              </>
-            )}
+              )}
+            </View>
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -1344,54 +1399,49 @@ const styles = StyleSheet.create({
     paddingBottom:     spacing.lg,
   },
   headerLeft:     { flex: 1, marginRight: spacing.sm },
-  headerTextScrim: {
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    borderRadius:    20,
-    padding:         12,
-  },
-  headerDate:     { fontSize: fontSize.md, color: colors.textSecondary, marginBottom: 8 },
-  headerGreeting: { fontSize: 20, fontWeight: '700', lineHeight: 28, color: colors.textPrimary, marginBottom: 6 },
+  headerDate:     { fontSize: 14, lineHeight: 20, fontWeight: '600', marginBottom: 6 },
+  headerGreeting: { fontSize: 26, lineHeight: 34, fontWeight: '800', marginBottom: 8 },
   periodBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    alignSelf:        'flex-start',
-    backgroundColor:  'rgba(255,255,255,0.65)',
-    borderRadius:     radius.pill, paddingVertical: 4, paddingHorizontal: 12,
-    borderWidth: 1,   borderColor: 'rgba(255,255,255,0.9)',
+    alignSelf:    'flex-start',
+    borderRadius: 18, paddingVertical: 5, paddingHorizontal: 12,
+    borderWidth:  1,
   },
   periodDot:  { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.periodDot },
-  periodLabel:{ fontSize: fontSize.base, color: colors.textPrimary, fontWeight: '500' },
+  periodLabel:{ fontSize: 14, fontWeight: '700' },
   headerGif:  { width: 92, height: 92, flexShrink: 0 },
 
-  // ── 四宮格 ──
-  gridWrapper: {
-    flexDirection:    'row',
-    flexWrap:         'wrap',
-    justifyContent:   'space-between',
-    paddingHorizontal: spacing.xl,
-    marginTop:         spacing.xs,
-    marginBottom:      spacing.xs,
+  // ── 本期現金流摘要 ──
+  cashflowCard:       { marginHorizontal: spacing.screenH, marginBottom: spacing.screenH, borderRadius: radius.lg },
+  cashflowTitleRow:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  cashflowTitle:      { fontSize: 18, lineHeight: 24, fontWeight: '700' },
+  cashflowPeriod:     { fontSize: 12, color: '#94A3B8' },
+  cashflowRowItem:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 7 },
+  cashflowLabelGroup: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  cashflowLabel:      { fontSize: 14, fontWeight: '500', color: '#475569' },
+  cashflowValue:      { fontSize: 15, fontWeight: '700' },
+  cashflowDivider:    { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(0,0,0,0.09)', marginTop: 4 },
+  cashflowSub:        { fontSize: 12, marginTop: 6 },
+
+  // ── 本期花最多 ──
+  topExpCard:  { marginHorizontal: spacing.screenH, marginBottom: spacing.screenH, borderRadius: radius.lg },
+  topExpTitle: { fontSize: 18, lineHeight: 24, fontWeight: '700', marginBottom: 8 },
+  topExpRow:   { flexDirection: 'row', alignItems: 'center', paddingVertical: 7 },
+  topExpRank:  { width: 22, fontSize: 14, fontWeight: '700', color: '#94A3B8' },
+  topExpCat:   { flex: 1, fontSize: 14, fontWeight: '500', color: '#475569' },
+  topExpAmt:   { fontSize: 15, fontWeight: '700' },
+
+  // ── 明細篩選 chips ──
+  sectionHeaderRow:      { paddingHorizontal: spacing.xl, marginBottom: 8 },
+  filterChipsContainer:  { paddingHorizontal: spacing.xl, gap: 8, paddingVertical: 2 },
+  filterChip: {
+    paddingHorizontal: 16, paddingVertical: 8,
+    borderRadius:      20,
+    backgroundColor:   'rgba(255,255,255,0.72)',
+    borderWidth: 1,    borderColor: 'rgba(148,163,184,0.25)',
   },
-  neuCardOuter: {
-    width:        '47%',
-    height:       80,
-    marginBottom: spacing.lg,
-    borderRadius: radius.lg,
-    overflow:     'hidden',
-  },
-  neuCardBody: {
-    flex:              1,
-    paddingHorizontal: spacing.lg,
-    justifyContent:    'center',
-  },
-  sumRow:     { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-  sumIconBox: {
-    width: 44, height: 44, borderRadius: 12,
-    alignItems: 'center', justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.25)', flexShrink: 0,
-  },
-  sumTextCol: { flex: 1, justifyContent: 'center' },
-  sumLabel:   { fontSize: fontSize.md, color: colors.textMuted, marginBottom: 4 },
-  sumVal:     { fontSize: 20, fontWeight: '700' },
+  filterChipActive: { backgroundColor: '#8B5CF6', borderColor: '#8B5CF6' },
+  filterChipText:   { fontSize: 14, fontWeight: '700' },
 
   // ── 存款橫幅（GlassCard 版）──
   savingsBannerWrap: {
@@ -1470,48 +1520,43 @@ const styles = StyleSheet.create({
   // ── 進度條 ──
   progressCard: { marginHorizontal: spacing.screenH, marginBottom: spacing.screenH, borderRadius: radius.lg },
   progressTop:    { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
-  progressTitle:  { fontSize: fontSize.lg, fontWeight: '700', color: colors.textPrimary },
-  progressMeta:   { fontSize: fontSize.base, color: colors.textSecondary },
+  progressTitle:  { fontSize: 18, lineHeight: 24, fontWeight: '700', color: '#1E293B' },
+  progressMeta:   { fontSize: 14, lineHeight: 21, color: '#475569' },
   progressTrack:  { height: 10, overflow: 'hidden', marginBottom: 8 },
   progressFill:   { height: 10, borderRadius: 6 },
   progressBottom: { flexDirection: 'row', justifyContent: 'space-between' },
 
-  // ── 圓餅圖 ──
-  pieRow: {
-    flexDirection: 'row', justifyContent: 'space-between',
-    paddingHorizontal: spacing.screenH, gap: 10, marginBottom: 18,
-  },
-  pieCard: {
-    flex: 1,
-    borderRadius: radius.xl, padding: spacing.lg,
-    overflow: 'hidden',
-  },
-  pieTitle:  { fontSize: fontSize.md, fontWeight: '700', color: colors.textPrimary, marginBottom: 10 },
-  pieCenter: { alignItems: 'center', marginBottom: 8 },
 
   // ── 明細 ──
-  sectionTitle: { fontSize: fontSize.h3, fontWeight: '700', paddingHorizontal: spacing.xl, marginBottom: 10 },
+  sectionTitle: { fontSize: 22, lineHeight: 28, fontWeight: '800', paddingHorizontal: spacing.xl, marginBottom: 10, color: '#1E293B' },
   emptyText:    { textAlign: 'center', paddingVertical: 32, color: colors.textHint, fontSize: fontSize.lg },
   dayGroup:     { marginBottom: spacing.lg, paddingHorizontal: spacing.screenH, gap: spacing.sm },
   dayLabelRow:  { marginBottom: 8 },
   dayLabelText: {
-    fontSize: fontSize.md, fontWeight: '700', color: colors.textSecondary,
-    backgroundColor: colors.tagBg, alignSelf: 'flex-start',
-    paddingHorizontal: 10, paddingVertical: 3, borderRadius: radius.xs,
+    fontSize: 13, fontWeight: '700', color: '#334155',
+    backgroundColor: 'rgba(255,255,255,0.70)', alignSelf: 'flex-start',
+    paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.xs,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.85)',
   },
   dayCard:     { overflow: 'hidden' },
-  txDivider:   { height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,255,255,0.8)', marginHorizontal: spacing.lg },
-  txRow:       { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: spacing.md, paddingHorizontal: spacing.lg },
-  txIconBox:   { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  txIconEmoji: { fontSize: 20 },
+  txDivider:   { height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(148,163,184,0.16)', marginHorizontal: spacing.lg },
+  txRow:       { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 13, paddingHorizontal: spacing.lg },
+  txIconBox:   { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  txIconEmoji: { fontSize: 18 },
   txInfo:      { flex: 1, minWidth: 0 },
-  txName:      { fontSize: fontSize.lg, fontWeight: '600', color: colors.textPrimary, ...textShadows.light },
+  txName:      { fontSize: 16, lineHeight: 22, fontWeight: '700', color: '#1E293B' },
   txTimeRow:   { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
-  txTime:      { fontSize: fontSize.base, color: colors.textMuted, ...textShadows.light },
+  txTime:      { fontSize: 12, lineHeight: 17, fontWeight: '500', color: '#94A3B8' },
   txRight:     { alignItems: 'flex-end', flexShrink: 0 },
-  txAmount:    { fontSize: fontSize.xl, fontWeight: '700', ...textShadows.heavy },
-  payBadge:    { borderRadius: radius.sm, paddingHorizontal: 7, paddingVertical: 2, marginTop: 6 },
-  payBadgeText:{ fontSize: fontSize.xs + 1, fontWeight: '600' },
+  txAmount:    {
+    fontSize: 17, lineHeight: 23, fontWeight: '700',
+    textShadowColor: 'transparent', textShadowRadius: 0, textShadowOffset: { width: 0, height: 0 },
+  },
+  payBadge: {
+    borderRadius: 9, paddingHorizontal: 8, paddingVertical: 3, marginTop: 3,
+    borderWidth: 1,
+  },
+  payBadgeText:{ fontSize: 11, fontWeight: '700' },
   delBtn:      { paddingHorizontal: 4, paddingVertical: 2 },
   modalTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 },
 
@@ -1546,15 +1591,6 @@ const styles = StyleSheet.create({
   // ── Modal 內部高對比白玉主題 ──────────────────────────────
   // 白玉底 (0.96) → 所有「玻璃白」元件都改用「深色凹槽」風格
 
-  typeRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
-  typeBtn: {
-    flex: 1, padding: 12, borderRadius: radius.lg, alignItems: 'center',
-    // 白底上用深色凹槽，而不是白色玻璃（白疊白 = 隱形）
-    backgroundColor: 'rgba(0,0,0,0.04)',
-    borderWidth: 1.5, borderColor: 'rgba(0,0,0,0.07)',
-  },
-  typeBtnText: { fontWeight: '700', fontSize: fontSize.xl, color: colors.textPrimary },
-
   amtInput: {
     borderRadius:    radius.lg,
     padding:         spacing.lg,
@@ -1568,23 +1604,6 @@ const styles = StyleSheet.create({
     borderColor:     'rgba(0,0,0,0.06)',
     color:           colors.textPrimary,
   },
-
-  catScroll: { marginBottom: spacing.lg },
-  catGroupWrap: { marginBottom: spacing.lg },
-  catGroupRow:  { marginBottom: 8 },
-  catGroupLabel:{ fontSize: fontSize.xs + 1, fontWeight: '600', color: '#94A3B8', marginBottom: 6, letterSpacing: 0.4 },
-  catGroupChips:{ flexDirection: 'row', gap: 8 },
-  catHintText:  { fontSize: fontSize.xs + 1, color: '#64748B', marginTop: 4, fontStyle: 'italic' },
-  catChip: {
-    paddingHorizontal: 14, paddingVertical: 8, borderRadius: radius.pill, marginRight: 8,
-    backgroundColor: 'rgba(0,0,0,0.04)',
-    borderWidth: 1.5, borderColor: 'rgba(0,0,0,0.07)',
-  },
-  catChipActive: {
-    backgroundColor: 'rgba(52,211,153,0.18)',
-    borderWidth: 1.5, borderColor: colors.income,
-  },
-  catChipText: { fontSize: fontSize.md, fontWeight: '600', color: colors.textPrimary },
 
   payRow: { flexDirection: 'row', gap: 10, marginBottom: spacing.lg },
   payBtn: {
@@ -1609,10 +1628,96 @@ const styles = StyleSheet.create({
     color:           colors.textPrimary,
   },
 
-  dragHandle:    { width: 40, height: 4, backgroundColor: '#E2E8F0', borderRadius: 2, alignSelf: 'center', marginBottom: 16 },
+  dragHandle:    { width: 40, height: 4, backgroundColor: '#E2E8F0', borderRadius: 2, alignSelf: 'center', marginTop: 12, marginBottom: 14 },
   // submitBtn 移除外擴光暈（glow shadowColor 在白底會形成浮腫感），保留鮮豔實色
   submitBtn:     { padding: 16, borderRadius: radius.lg, alignItems: 'center', marginTop: 8 },
   submitBtnText: { color: colors.textWhite, fontSize: fontSize.h3, fontWeight: '700', letterSpacing: 0.5 },
+
+  // ── 存款 Bottom Sheet ──
+  savingsSheet: {
+    backgroundColor:      'rgba(255,255,255,0.96)',
+    borderTopLeftRadius:  32,
+    borderTopRightRadius: 32,
+    borderWidth:          1,
+    borderColor:          'rgba(255,255,255,0.86)',
+    shadowColor:          '#000',
+    shadowOffset:         { width: 0, height: -8 },
+    shadowOpacity:        0.10,
+    shadowRadius:         22,
+    elevation:            18,
+  },
+  savingsSheetTitle: {
+    fontSize:   20,
+    fontWeight: '800',
+    color:      '#1E293B',
+  },
+  savingsSheetBody: {
+    paddingHorizontal: spacing.xl + 2,
+    paddingTop:        spacing.md,
+    paddingBottom:     spacing.lg,
+  },
+  savingsFieldLabel: {
+    fontSize:      fontSize.sm,
+    fontWeight:    '700',
+    color:         '#94A3B8',
+    letterSpacing: 0.5,
+    marginBottom:  spacing.sm,
+    textTransform: 'uppercase',
+  },
+  savingsInput: {
+    backgroundColor:   '#F8FAFC',
+    borderRadius:      18,
+    paddingHorizontal: 18,
+    paddingVertical:   12,
+    fontSize:          26,
+    fontWeight:        '800',
+    color:             '#1E293B',
+    borderWidth:       1,
+    borderColor:       'rgba(0,0,0,0.06)',
+    textAlign:         'center',
+  },
+  savingsHint: {
+    marginTop:  spacing.sm,
+    fontSize:   13,
+    lineHeight: 19,
+    color:      '#94A3B8',
+    textAlign:  'center',
+  },
+  savingsFooter: {
+    flexDirection:     'row',
+    gap:               12,
+    paddingHorizontal: spacing.xl + 2,
+    paddingTop:        spacing.md,
+    paddingBottom:     Platform.OS === 'android' ? 28 : 20,
+    borderTopWidth:    StyleSheet.hairlineWidth,
+    borderTopColor:    'rgba(0,0,0,0.06)',
+  },
+  savingsCancelBtn: {
+    flex:            1,
+    paddingVertical: 14,
+    borderRadius:    22,
+    alignItems:      'center',
+    backgroundColor: '#F8FAFC',
+    borderWidth:     1,
+    borderColor:     'rgba(0,0,0,0.06)',
+  },
+  savingsCancelText: {
+    fontSize:   16,
+    fontWeight: '700',
+    color:      '#475569',
+  },
+  savingsSaveBtn: {
+    flex:            1,
+    paddingVertical: 14,
+    borderRadius:    22,
+    alignItems:      'center',
+    backgroundColor: 'rgba(139,92,246,0.92)',
+  },
+  savingsSaveText: {
+    fontSize:   16,
+    fontWeight: '700',
+    color:      '#FFFFFF',
+  },
 
   // ── 日期觸發按鈕 ──
   dateTrigger: {
@@ -1639,4 +1744,189 @@ const styles = StyleSheet.create({
   cancelText:  { fontSize: fontSize.xl, fontWeight: '600', color: colors.textSecondary },
   confirmBtn:  { flex: 1, padding: spacing.lg, borderRadius: radius.lg, alignItems: 'center' },
   confirmText: { color: colors.textWhite, fontSize: fontSize.xl, fontWeight: '700' },
+
+  // ── 投資資產 Bottom Sheet ──
+  investmentSheet: {
+    backgroundColor:      'rgba(255,255,255,0.96)',
+    borderTopLeftRadius:  32,
+    borderTopRightRadius: 32,
+    borderWidth:          1,
+    borderColor:          'rgba(255,255,255,0.86)',
+    paddingHorizontal:    20,
+    paddingBottom:        28,
+    maxHeight:            '88%',
+    shadowColor:          '#000',
+    shadowOffset:         { width: 0, height: -8 },
+    shadowOpacity:        0.10,
+    shadowRadius:         22,
+    elevation:            18,
+  },
+  investmentSheetList: {
+    height:    '62%',
+    minHeight: 500,
+  },
+  investmentSheetForm: {
+    height:    '82%',
+    minHeight: 580,
+  },
+  invHeaderRow: {
+    flexDirection:  'row',
+    alignItems:     'center',
+    justifyContent: 'space-between',
+    marginTop:      8,
+    marginBottom:   16,
+  },
+  invTitleGroup: {
+    flexDirection: 'row',
+    alignItems:    'center',
+    gap:           8,
+  },
+  invSheetTitle: {
+    fontSize:   20,
+    fontWeight: '800',
+    color:      '#1E293B',
+  },
+  invBackBtn: {
+    flexDirection: 'row',
+    alignItems:    'center',
+    gap:           4,
+    padding:       6,
+  },
+  invBackText: {
+    fontSize:   14,
+    fontWeight: '600',
+    color:      '#64748B',
+  },
+  invBody: {
+    flex:      1,
+    minHeight: 240,
+  },
+  invBodyContent: {
+    paddingBottom: 96,
+    gap:           12,
+  },
+  // 投資摘要卡
+  invSummaryCard: {
+    backgroundColor: 'rgba(248,250,252,0.94)',
+    borderRadius:    16,
+    padding:         14,
+    borderWidth:     1,
+    borderColor:     'rgba(139,92,246,0.18)',
+    marginBottom:    8,
+  },
+  summaryAccentBar: {
+    height:        3,
+    borderRadius:  999,
+    marginBottom:  10,
+  },
+  invSummaryTop: {
+    flexDirection:  'row',
+    justifyContent: 'space-between',
+    alignItems:     'flex-start',
+    marginBottom:   6,
+  },
+  invSummaryLabel:   { fontSize: 12, fontWeight: '600', color: '#94A3B8', marginBottom: 4 },
+  invSummaryMain:    { fontSize: 20, fontWeight: '800', color: '#1E293B' },
+  invSummaryProfit:  { fontSize: 16, fontWeight: '700' },
+  invSummaryRate:    { fontSize: 13, fontWeight: '600', marginTop: 2 },
+  invSummaryInvested:{ fontSize: 12, color: '#94A3B8', fontWeight: '500' },
+  // 空狀態
+  invEmptyBox: {
+    paddingVertical: 32,
+    alignItems:      'center',
+    gap:             8,
+  },
+  invEmptyTitle: { fontSize: 16, fontWeight: '700', color: '#475569' },
+  invEmptyHint:  { fontSize: 13, color: '#94A3B8', textAlign: 'center', lineHeight: 20 },
+  // 持股卡片
+  holdingCard: {
+    backgroundColor: 'rgba(248,250,252,0.94)',
+    borderRadius:    16,
+    padding:         14,
+    borderWidth:     1,
+    borderColor:     'rgba(0,0,0,0.06)',
+  },
+  holdingTopRow: {
+    flexDirection: 'row',
+    alignItems:    'flex-start',
+  },
+  holdingTitle:   { fontSize: 15, fontWeight: '700', color: '#1E293B', marginBottom: 4 },
+  holdingMeta:    { fontSize: 12, color: '#64748B', lineHeight: 18 },
+  holdingValue:   { fontSize: 13, fontWeight: '600', color: '#475569', marginTop: 4 },
+  holdingProfit:  { fontSize: 14, fontWeight: '700', marginTop: 8 },
+  holdingActions: { flexDirection: 'row', gap: 8, paddingLeft: 10 },
+  holdingActionBtn: { padding: 6 },
+  // 表單
+  invFormRow:     { flexDirection: 'row', gap: 8, marginBottom: 10 },
+  invInput: {
+    backgroundColor:   '#F8FAFC',
+    borderRadius:      16,
+    paddingHorizontal: 14,
+    paddingVertical:   11,
+    fontSize:          15,
+    fontWeight:        '500',
+    color:             '#1E293B',
+    borderWidth:       1,
+    borderColor:       'rgba(0,0,0,0.06)',
+  },
+  invToggleRow:     { flexDirection: 'row', gap: 8, marginBottom: 10 },
+  invToggleBtn: {
+    flex:            1,
+    padding:         12,
+    borderRadius:    radius.lg,
+    alignItems:      'center',
+    backgroundColor: '#F8FAFC',
+    borderWidth:     1,
+    borderColor:     'rgba(0,0,0,0.06)',
+  },
+  invToggleBtnActive: {
+    backgroundColor: 'rgba(139,92,246,0.10)',
+    borderColor:     '#8B5CF6',
+  },
+  invToggleBtnText: { fontSize: 14, fontWeight: '600', color: '#475569' },
+  invFetchBtn: {
+    paddingHorizontal: 14,
+    paddingVertical:   13,
+    borderRadius:      radius.lg,
+    backgroundColor:   '#F1F5F9',
+    borderWidth:       1,
+    borderColor:       'rgba(0,0,0,0.06)',
+    justifyContent:    'center',
+  },
+  invFetchBtnText: { fontSize: 13, fontWeight: '600', color: '#475569' },
+  // 固定底部
+  invFooter: {
+    paddingTop:      14,
+    paddingBottom:   24,
+    borderTopWidth:  1,
+    borderTopColor:  'rgba(0,0,0,0.06)',
+  },
+  invAddBtn: {
+    flexDirection:   'row',
+    alignItems:      'center',
+    justifyContent:  'center',
+    gap:             8,
+    backgroundColor: 'rgba(139,92,246,0.92)',
+    borderRadius:    22,
+    paddingVertical: 14,
+  },
+  invAddBtnText: { fontSize: 16, fontWeight: '700', color: '#fff' },
+  invCancelBtn: {
+    flex:            1,
+    paddingVertical: 14,
+    borderRadius:    22,
+    alignItems:      'center',
+    backgroundColor: '#F8FAFC',
+    borderWidth:     1,
+    borderColor:     'rgba(0,0,0,0.06)',
+  },
+  invCancelText: { fontSize: 16, fontWeight: '600', color: '#475569' },
+  invSaveBtn: {
+    flex:            1.6,
+    paddingVertical: 14,
+    borderRadius:    22,
+    alignItems:      'center',
+    backgroundColor: 'rgba(139,92,246,0.92)',
+  },
+  invSaveText: { fontSize: 16, fontWeight: '700', color: '#fff' },
 });
