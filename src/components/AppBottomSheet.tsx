@@ -11,6 +11,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // ─── 型別 ───────────────────────────────────────────────
 interface SheetButtonProps {
@@ -76,6 +77,11 @@ export default function AppBottomSheet({
   children,
   sheetStyle,
 }: AppBottomSheetProps) {
+  const insets   = useSafeAreaInsets();
+  const safeBottom = Platform.OS === 'android'
+    ? Math.max(insets.bottom, 24)
+    : Math.max(insets.bottom, 12);
+
   const [kbHeight, setKbHeight] = useState(0);
 
   useEffect(() => {
@@ -93,6 +99,7 @@ export default function AppBottomSheet({
   const sheet = (
     <View style={[
       sty.sheet,
+      { paddingBottom: safeBottom + 16 },
       sheetStyle,
       Platform.OS === 'android' && kbHeight > 0 && { marginBottom: kbHeight },
     ]}>
@@ -157,7 +164,7 @@ const sty = StyleSheet.create({
     borderWidth:          1,
     borderColor:          'rgba(255,255,255,0.86)',
     paddingHorizontal:    20,
-    paddingBottom:        Platform.OS === 'android' ? 28 : 20,
+    paddingBottom:        20,   // base; overridden by safeBottom inline
     shadowColor:          '#000',
     shadowOffset:         { width: 0, height: -8 },
     shadowOpacity:        0.10,

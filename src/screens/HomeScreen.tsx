@@ -10,14 +10,16 @@ import { useBudgetStore }       from '../store/useBudgetStore';
 import { RobotAssistant, BubbleAlert, RobotFinanceSummary } from '../components/RobotAssistant';
 import { PigSavings }           from '../components/PigSavings';
 import { fmt, dayLabel }        from '../utils/format';
-import { localDateStr, getPeriod, getDueDateInPeriod } from '../utils/period';
+import { localDateStr, getPeriod, getDueDateInPeriod, getBillDueDate, getBillExecutionDate } from '../utils/period';
 import { BillReminderModal } from '../components/BillReminderModal';
 import {
   Transaction, Bill, StockHolding,
   getCatIcon, normalizeCategory, getCatGroup, getBillPaymentMode, periodKey,
+  getBillStatus, BILL_REMIND_DAYS,
 } from '../types';
 import { AddTransactionModal, AddTransactionInput } from '../components/AddTransactionModal';
 import AppBottomSheet, { SheetButton } from '../components/AppBottomSheet';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radius, spacing, fontSize, shadows, textShadows } from '../theme';
 import { GlassCard } from '../components/GlassCard';
 import { fetchStockPrice, StockPriceFetchError } from '../services/stockPriceService';
@@ -39,6 +41,11 @@ function InsetBox({ children, style }: { children: React.ReactNode; style?: obje
 
 
 export function HomeScreen() {
+  const insets     = useSafeAreaInsets();
+  const safeBottom = Platform.OS === 'android'
+    ? Math.max(insets.bottom, 24)
+    : Math.max(insets.bottom, 12);
+
   const {
     transactions, settings, bgSettings, stockHoldings, bills,
     addTransaction, deleteTransaction,
@@ -123,24 +130,56 @@ export function HomeScreen() {
        .reduce((s, t) => s + t.amount, 0),
   [txs]);
 
-  // ── 即將到期帳單（3 天內，手動未繳才提醒；自動扣繳不提醒）──
+  // ── 即將到期帳單（手動未繳才提醒；依各帳單 remindDaysBefore 提前提醒）──
   const upcomingRecurring = useMemo(() => {
-    const todayMs = today.getTime();
-    const pKey    = periodKey(period.startStr);
+    const todayMs  = today.getTime();
+    const pKey     = periodKey(period.startStr);
+    const holidays = settings.marketHolidays ?? [];
     return bills
       .filter(b => {
         if (getBillPaymentMode(b) !== 'manual') return false;
-        // 本期已繳（lastPaidPeriodKey 或 paidPeriods 任一標記）→ 不提醒
         return b.lastPaidPeriodKey !== pKey && !b.paidPeriods.includes(period.startStr);
       })
       .map(b => {
-        const due       = getDueDateInPeriod(b.dueDay, period);
-        const daysUntil = Math.round((due.getTime() - todayMs) / 86400000);
-        return { name: b.name, amount: b.amount, category: b.cat, daysUntil, paymentMode: getBillPaymentMode(b) as 'manual' | 'auto' };
+        const due        = getBillDueDate(b, period, holidays);
+        const exec       = getBillExecutionDate(b, period);
+        const daysUntil  = Math.round((due.getTime() - todayMs) / 86400000);
+        const remindDays = b.remindDaysBefore ?? BILL_REMIND_DAYS;
+        return {
+          name:           b.name,
+          amount:         b.amount,
+          category:       b.cat,
+          daysUntil,
+          remindDays,
+          paymentMode:    getBillPaymentMode(b) as 'manual' | 'auto',
+          paymentRule:    (b.paymentRule ?? 'fixedDate') as 'fixedDate' | 'tPlusBusinessDays',
+          executionDay:   b.dueDay,
+          settlementBusinessDays: b.settlementBusinessDays ?? 2,
+          executionDateStr: localDateStr(exec),
+        };
       })
-      .filter(b => b.daysUntil >= -7 && b.daysUntil <= 3)  // 包含逾期 7 天內
+      .filter(b => b.daysUntil >= -7 && b.daysUntil <= b.remindDays)
       .sort((a, b) => a.daysUntil - b.daysUntil);
-  }, [bills, period, today]);
+  }, [bills, period, today, settings.marketHolidays]);
+
+  // ── 需要在首頁顯示的緊急帳單（upcoming / dueToday / overdue）──
+  const urgentBills = useMemo(() => {
+    const todayStr = localDateStr(today);
+    const holidays = settings.marketHolidays ?? [];
+    return bills
+      .filter(b => b.enabled !== false)
+      .map(b => {
+        const due     = getBillDueDate(b, period, holidays);
+        const exec    = getBillExecutionDate(b, period);
+        const dueStr  = localDateStr(due);
+        const execStr = localDateStr(exec);
+        const status  = getBillStatus(b, todayStr, period.startStr, due);
+        const daysUntil = Math.round((due.getTime() - today.getTime()) / 86400000);
+        return { ...b, status, dueStr, execStr, daysUntil };
+      })
+      .filter(b => b.status === 'upcoming' || b.status === 'dueToday' || b.status === 'overdue')
+      .sort((a, b) => a.daysUntil - b.daysUntil);
+  }, [bills, period, today, settings.marketHolidays]);
 
   // ── 傳給 RobotAssistant 的財務摘要 ──
   const financeSummary = useMemo((): RobotFinanceSummary => {
@@ -728,6 +767,65 @@ export function HomeScreen() {
         </Card>
 
         {/* ══════════════════════════════════
+            近期帳單提醒卡
+        ══════════════════════════════════ */}
+        {urgentBills.length > 0 && (
+          <View style={styles.billReminderWrap}>
+            <View style={styles.billReminderHeader}>
+              <Text style={[styles.billReminderTitle, { color: dynPrimary }]}>📋 近期帳單</Text>
+            </View>
+            {urgentBills.map((b, idx) => {
+              const isOverdue   = b.status === 'overdue';
+              const isDueToday  = b.status === 'dueToday';
+              const accentClr   = isOverdue ? '#EF4444' : isDueToday ? '#F59E0B' : '#38BDF8';
+              const badgeText   = isOverdue
+                ? `逾期 ${Math.abs(b.daysUntil)} 天`
+                : isDueToday ? '今天扣款'
+                : `${b.daysUntil} 天後扣款`;
+              const isInvest    = (b.paymentRule ?? 'fixedDate') === 'tPlusBusinessDays';
+              const n           = b.settlementBusinessDays ?? 2;
+              const metaText    = isInvest
+                ? `${b.dueDay} 日執行｜T+${n} 交割｜${b.dueStr.slice(5).replace('-', '/')} 扣款`
+                : `每月 ${b.dueDay} 日｜NT$${b.amount.toLocaleString('zh-TW')}`;
+              return (
+                <View
+                  key={b.id}
+                  style={[
+                    styles.billReminderRow,
+                    { borderLeftColor: accentClr },
+                    idx === urgentBills.length - 1 && { borderBottomWidth: 0 },
+                  ]}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.billReminderName, { color: dynPrimary }]}>{b.name}</Text>
+                    <Text style={[styles.billReminderAmt, { color: dynMuted }]}>{metaText}</Text>
+                    {isInvest && (
+                      <Text style={[styles.billReminderAmt, { color: dynMuted }]}>
+                        NT${b.amount.toLocaleString('zh-TW')}
+                      </Text>
+                    )}
+                  </View>
+                  <View style={styles.billReminderRight}>
+                    <View style={[styles.billReminderBadge, {
+                      backgroundColor: `${accentClr}22`,
+                      borderColor: `${accentClr}55`,
+                    }]}>
+                      <Text style={[styles.billReminderBadgeText, { color: accentClr }]}>{badgeText}</Text>
+                    </View>
+                    <Pressable
+                      style={[styles.billReminderBtn, { backgroundColor: accentClr }]}
+                      onPress={() => { useBudgetStore.getState().markBillPaid(b.id); }}
+                    >
+                      <Text style={styles.billReminderBtnText}>已繳</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        )}
+
+        {/* ══════════════════════════════════
             投資資產卡
         ══════════════════════════════════ */}
         <Pressable
@@ -1040,6 +1138,7 @@ export function HomeScreen() {
         >
           <View style={[
             styles.investmentSheet,
+            { paddingBottom: investmentKeyboardHeight > 0 ? 12 : safeBottom + 16 },
             investmentView === 'list' ? styles.investmentSheetList : styles.investmentSheetForm,
             Platform.OS === 'android' && investmentKeyboardHeight > 0 && {
               marginBottom: investmentKeyboardHeight,
@@ -1267,11 +1366,8 @@ export function HomeScreen() {
               )}
             </ScrollView>
 
-            {/* ── 固定底部按鈕 ── */}
-            <View style={[
-              styles.invFooter,
-              Platform.OS === 'android' && investmentKeyboardHeight > 0 && { paddingBottom: 12 },
-            ]}>
+            {/* ── 固定底部按鈕（底距由 investmentSheet paddingBottom 統一控制）── */}
+            <View style={[styles.invFooter, { paddingBottom: 0 }]}>
               {investmentView === 'list' ? (
                 <Pressable
                   style={styles.invAddBtn}
@@ -1425,6 +1521,27 @@ const styles = StyleSheet.create({
   savingsBannerAmt:  { fontSize: fontSize.hero, fontWeight: '700', color: colors.textPrimary, marginBottom: 6 },
   savingsBannerSub:  { fontSize: fontSize.xs + 2, color: colors.textMuted },
   savingsPigWrap:    { width: 130, height: 120, alignItems: 'center', justifyContent: 'center', overflow: 'visible' },
+
+  // ── 近期帳單提醒卡 ──
+  billReminderWrap: {
+    marginHorizontal: spacing.screenH,
+    marginBottom:     spacing.screenH,
+    borderRadius:     16,
+    overflow:         'hidden',
+    backgroundColor:  'rgba(255,255,255,0.72)',
+    borderWidth:      1,
+    borderColor:      'rgba(0,0,0,0.07)',
+  },
+  billReminderHeader:    { paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.06)' },
+  billReminderTitle:     { fontSize: 13, fontWeight: '600' },
+  billReminderRow:       { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 11, borderLeftWidth: 3, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.04)' },
+  billReminderName:      { fontSize: 14, fontWeight: '600', marginBottom: 2 },
+  billReminderAmt:       { fontSize: 12 },
+  billReminderRight:     { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  billReminderBadge:     { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, borderWidth: 1 },
+  billReminderBadgeText: { fontSize: 12, fontWeight: '600' },
+  billReminderBtn:       { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
+  billReminderBtnText:   { fontSize: 12, fontWeight: '700', color: '#fff' },
 
   // ── 投資資產卡 ──
   investmentCardWrap: {

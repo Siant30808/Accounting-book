@@ -75,16 +75,29 @@ export interface MonthlyCategoryBudgets {
   娛樂:     number;
 }
 
+// ── 交易所休市日 ──
+export interface MarketHoliday {
+  date:    string;             // YYYY-MM-DD
+  name?:   string;
+  source:  'remote' | 'manual';
+}
+
 // ── App 全域設定（持久化）──
 export interface AppSettings {
   username:               string;
   payday:                 number;
-  mealPeriodBudget:       number;              // 本期餐費預算（每日上限由系統計算）
-  monthlyCategoryBudgets: MonthlyCategoryBudgets; // 各類生活預算
+  mealPeriodBudget:       number;
+  monthlyCategoryBudgets: MonthlyCategoryBudgets;
   savings:                number;
   lastPeriodStart:        string;
   lastPeriodEnd:          string;
   periodBalances:         Record<string, number>;
+  /** 休市日資料（遠端或手動新增）*/
+  marketHolidays?:         MarketHoliday[];
+  /** 最後更新休市日的時間（ISO string）*/
+  marketHolidayUpdatedAt?: string;
+  /** 已下載的休市日所屬年度 */
+  marketHolidayYear?:      number;
 }
 
 // ── FAB 位置（持久化）──
@@ -112,6 +125,10 @@ export interface Bill {
   id:                 number;
   name:               string;
   amount:             number;
+  /**
+   * fixedDate 時：每月扣款日
+   * tPlusBusinessDays 時：每月交易 / 執行日（實際扣款 = 執行日 + T+N 營業日）
+   */
   dueDay:             number;
   cat:                string;
   /** 明確標示付款方式 */
@@ -125,6 +142,14 @@ export interface Bill {
   paidAt?:            string;
   /** 帳單是否啟用（預設 true，false 時不觸發提醒也不自動記帳）*/
   enabled?:           boolean;
+  /** 扣款日期規則：固定日期 or T+N 營業日交割（投資類），預設 fixedDate */
+  paymentRule?:       'fixedDate' | 'tPlusBusinessDays';
+  /** T+N 交割天數（tPlusBusinessDays 用），預設 2 */
+  settlementBusinessDays?: number;
+  /** 到期日前幾天開始提醒，預設 3 */
+  remindDaysBefore?:  number;
+  /** 備註 */
+  note?:              string;
 }
 
 /** 由 period.startStr（YYYY-MM-DD）產生月份 key（YYYY-MM）*/
@@ -135,6 +160,64 @@ export function periodKey(startStr: string): string {
 /** 取得固定帳單的有效付款方式（相容舊資料）*/
 export function getBillPaymentMode(bill: Bill): 'manual' | 'auto' {
   return bill.paymentMode ?? (bill.autoDeduct ? 'auto' : 'manual');
+}
+
+export type BillStatus = 'disabled' | 'paid' | 'auto' | 'upcoming' | 'dueToday' | 'overdue' | 'normal';
+
+/** 帳單提前提醒預設天數 */
+export const BILL_REMIND_DAYS = 3;
+
+// ── 日期計算 helpers ──────────────────────────────────────────
+
+// 內部用，避免與 utils/period 循環引用
+function _fmtDate(d: Date): string {
+  return d.getFullYear() + '-' +
+    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0');
+}
+
+export function isWeekend(date: Date): boolean {
+  const d = date.getDay();
+  return d === 0 || d === 6;
+}
+
+/** 是否為營業日（排除週六、週日及 holidays 中的休市日）*/
+export function isBusinessDay(date: Date, holidays: MarketHoliday[] = []): boolean {
+  if (isWeekend(date)) return false;
+  const ds = _fmtDate(date);
+  return !holidays.some(h => h.date === ds);
+}
+
+/** 從 start 往後數 days 個營業日（排除週六、週日及 holidays）*/
+export function addBusinessDays(start: Date, days: number, holidays: MarketHoliday[] = []): Date {
+  const d = new Date(start);
+  let added = 0;
+  while (added < days) {
+    d.setDate(d.getDate() + 1);
+    if (isBusinessDay(d, holidays)) added += 1;
+  }
+  return d;
+}
+
+/** 計算固定帳單在本期的繳費狀態（dueDate 由 getBillDueDate 計算後傳入）*/
+export function getBillStatus(
+  bill: Bill,
+  todayStr: string,       // YYYY-MM-DD
+  periodStartStr: string, // YYYY-MM-DD
+  dueDate: Date,          // 實際扣款日（已含 T+N 計算）
+): BillStatus {
+  if (bill.enabled === false) return 'disabled';
+  const pKey       = periodKey(periodStartStr);
+  const isPaid     = bill.lastPaidPeriodKey === pKey || bill.paidPeriods.includes(periodStartStr);
+  const mode       = getBillPaymentMode(bill);
+  if (isPaid)          return 'paid';
+  if (mode === 'auto') return 'auto';
+  const diffDays   = Math.round((dueDate.getTime() - new Date(todayStr + 'T00:00:00').getTime()) / 86400000);
+  const remindDays = bill.remindDaysBefore ?? BILL_REMIND_DAYS;
+  if (diffDays < 0)          return 'overdue';
+  if (diffDays === 0)        return 'dueToday';
+  if (diffDays <= remindDays) return 'upcoming';
+  return 'normal';
 }
 
 // ── 投資持股（持久化）──

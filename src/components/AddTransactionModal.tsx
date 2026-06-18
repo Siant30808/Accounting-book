@@ -13,6 +13,7 @@ import {
   Platform, Keyboard, KeyboardEvent,
   TextInput as RNTextInput,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { CAT_GROUPS, getCatHint } from '../types';
@@ -45,6 +46,11 @@ interface Props {
 }
 
 export function AddTransactionModal({ visible, initialType = 'expense', onClose, onAdd }: Props) {
+  const insets     = useSafeAreaInsets();
+  const safeBottom = Platform.OS === 'android'
+    ? Math.max(insets.bottom, 24)
+    : Math.max(insets.bottom, 12);
+
   const [addType,        setAddType]        = useState<'expense' | 'income'>(initialType);
   const [addAmt,         setAddAmt]         = useState('');
   const [addCat,         setAddCat]         = useState('餐費');
@@ -307,7 +313,7 @@ export function AddTransactionModal({ visible, initialType = 'expense', onClose,
           {/* ── 固定底部送出按鈕 ── */}
           <View style={[
             sty.footer,
-            Platform.OS === 'android' && keyboardHeight > 0 && { paddingBottom: 12 },
+            { paddingBottom: keyboardHeight > 0 ? 12 : safeBottom + 16 },
           ]}>
             <Pressable
               style={[
@@ -523,7 +529,7 @@ const sty = StyleSheet.create({
   footer: {
     paddingHorizontal: spacing.xl + 2,
     paddingTop:        spacing.md,
-    paddingBottom:     28,
+    paddingBottom:     28,   // base; overridden by safeBottom inline
     borderTopWidth:    StyleSheet.hairlineWidth,
     borderTopColor:    'rgba(0,0,0,0.06)',
   },

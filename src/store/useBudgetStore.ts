@@ -3,9 +3,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   Transaction, AppSettings, BgSettings, FabPosition, Bill, StockHolding,
   MonthlyCategoryBudgets, DEFAULT_SETTINGS, DEFAULT_MONTHLY_BUDGETS, STORAGE_KEYS, Period,
-  getBillPaymentMode, periodKey,
+  getBillPaymentMode, periodKey, MarketHoliday,
 } from '../types';
-import { currentPeriod, getPeriod, getAllPeriods, inPeriod, getDueDateInPeriod, localDateStr } from '../utils/period';
+import { currentPeriod, getPeriod, getAllPeriods, inPeriod, getDueDateInPeriod, localDateStr, getBillDueDate } from '../utils/period';
 
 // ── AsyncStorage 讀寫工具 ──
 async function readJSON<T>(key: string, fallback: T): Promise<T> {
@@ -62,6 +62,11 @@ interface BudgetState {
   unmarkBillPaid:     (id: number) => void;
   setBillDismissDate: (date: string) => void;
   checkBillReminders: () => Bill[] | null;
+
+  // ── 休市日管理 ──
+  updateRemoteMarketHolidays: (year: number, holidays: MarketHoliday[]) => void;
+  addManualMarketHoliday:     (holiday: MarketHoliday) => void;
+  deleteMarketHoliday:        (date: string) => void;
 }
 
 const DEFAULT_BG: BgSettings = { opacity: 100, fileUri: null, textMode: 'dark' };
@@ -206,9 +211,11 @@ export const useBudgetStore = create<BudgetState>((set, get) => ({
 
   // ── 固定帳單操作 ──
   addBill: (b) => {
-    // 若新增時本期到期日已過，視為跳過本期，從下一期開始提醒
-    const period   = currentPeriod(get().settings.payday);
-    const due      = getDueDateInPeriod(b.dueDay, period);
+    // 若新增時本期扣款日已過，視為跳過本期，從下一期開始提醒
+    const s        = get().settings;
+    const period   = currentPeriod(s.payday);
+    const holidays = s.marketHolidays ?? [];
+    const due      = getBillDueDate(b as Bill, period, holidays);
     const todayStr = localDateStr(new Date());
     const paidPeriods = todayStr > localDateStr(due) ? [period.startStr] : [];
 
@@ -314,7 +321,8 @@ export const useBudgetStore = create<BudgetState>((set, get) => ({
   // ── 帳單提醒檢查（App 開啟時呼叫）──
   checkBillReminders: () => {
     const { bills, settings, billDismissDate } = get();
-    const period  = currentPeriod(settings.payday);
+    const period   = currentPeriod(settings.payday);
+    const holidays = settings.marketHolidays ?? [];
     const todayStr = localDateStr(new Date());
 
     // 自動扣繳：到期日當天自動帶入消費明細（paymentMode='auto' 或舊版 autoDeduct=true）
@@ -324,17 +332,23 @@ export const useBudgetStore = create<BudgetState>((set, get) => ({
       const isAuto = getBillPaymentMode(b) === 'auto';
       if (b.enabled === false) return;
       if (isAuto && !b.paidPeriods.includes(period.startStr)) {
-        const due = getDueDateInPeriod(b.dueDay, period);
+        // 使用實際扣款日（tPlusBusinessDays 會加 T+N 營業日），只在扣款日當天或之後才自動記帳
+        const due = getBillDueDate(b, period, holidays);
         if (todayStr >= localDateStr(due)) {
           const now = new Date();
+          const isInvest = (b.paymentRule ?? 'fixedDate') === 'tPlusBusinessDays';
+          const n        = b.settlementBusinessDays ?? 2;
+          const noteStr  = isInvest
+            ? `固定帳單（自動扣繳）：${b.name}｜${b.dueDay} 日執行｜T+${n} 交割扣款`
+            : `固定帳單（自動扣繳）：${b.name}`;
           get().addTransaction({
             type:            'expense',
             cat:             b.cat,
             amount:          b.amount,
-            date:            localDateStr(due),
+            date:            localDateStr(due),   // 用扣款日作為交易日期
             time:            `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
             pay:             '現金',
-            note:            `固定帳單（自動扣繳）：${b.name}`,
+            note:            noteStr,
             source:          'recurring-auto',
             recurringBillId: b.id,
           });
@@ -362,6 +376,46 @@ export const useBudgetStore = create<BudgetState>((set, get) => ({
       return !alreadyPaid;
     });
     return unpaid.length ? unpaid : null;
+  },
+
+  // ── 休市日管理 ──
+
+  updateRemoteMarketHolidays: (year, remoteHolidays) => {
+    const s = get().settings;
+    const manual         = (s.marketHolidays ?? []).filter(h => h.source === 'manual');
+    const otherYearRemote = (s.marketHolidays ?? []).filter(
+      h => h.source === 'remote' && !h.date.startsWith(String(year))
+    );
+    const updated: AppSettings = {
+      ...s,
+      marketHolidays:         [...otherYearRemote, ...manual, ...remoteHolidays.map(h => ({ ...h, source: 'remote' as const }))],
+      marketHolidayUpdatedAt: new Date().toISOString(),
+      marketHolidayYear:      year,
+    };
+    set({ settings: updated });
+    writeJSON(STORAGE_KEYS.SETTINGS, updated);
+  },
+
+  addManualMarketHoliday: (holiday) => {
+    const s = get().settings;
+    const existing = s.marketHolidays ?? [];
+    if (existing.some(h => h.date === holiday.date)) return;
+    const updated: AppSettings = {
+      ...s,
+      marketHolidays: [...existing, { ...holiday, source: 'manual' as const }],
+    };
+    set({ settings: updated });
+    writeJSON(STORAGE_KEYS.SETTINGS, updated);
+  },
+
+  deleteMarketHoliday: (date) => {
+    const s = get().settings;
+    const updated: AppSettings = {
+      ...s,
+      marketHolidays: (s.marketHolidays ?? []).filter(h => h.date !== date),
+    };
+    set({ settings: updated });
+    writeJSON(STORAGE_KEYS.SETTINGS, updated);
   },
 }));
 

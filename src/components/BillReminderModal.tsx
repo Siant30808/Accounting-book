@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, Modal, Pressable, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, Modal, Pressable, StyleSheet, ScrollView, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import { Bill, Period, getCatIcon, getBillPaymentMode } from '../types';
 import { localDateStr, getDueDateInPeriod } from '../utils/period';
@@ -15,6 +16,11 @@ interface Props {
 }
 
 export function BillReminderModal({ visible, bills, period, onMarkPaid, onClose }: Props) {
+  const insets     = useSafeAreaInsets();
+  const safeBottom = Platform.OS === 'android'
+    ? Math.max(insets.bottom, 24)
+    : Math.max(insets.bottom, 12);
+
   const todayStr = localDateStr(new Date());
   const [dismissToday, setDismissToday] = useState(false);
 
@@ -24,7 +30,7 @@ export function BillReminderModal({ visible, bills, period, onMarkPaid, onClose 
     <Modal visible={visible} animationType="slide" transparent onRequestClose={handleClose}>
       <View style={{ flex: 1, justifyContent: 'flex-end' }}>
         <Pressable style={StyleSheet.absoluteFill} onPress={handleClose} />
-        <View style={styles.modalBox}>
+        <View style={[styles.modalBox, { paddingBottom: safeBottom + 16 }]}>
           <View style={styles.dragHandle} />
           <View style={styles.titleRow}>
             <Feather name="bell" size={18} color={colors.savings} />
@@ -91,7 +97,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius:  radius.xxl,
     borderTopRightRadius: radius.xxl,
     padding: 22,
-    paddingBottom: 36,
+    paddingBottom: 36,   // base; overridden by safeBottom inline
     borderWidth:   1,
     borderColor:   'rgba(255,255,255,0.80)',
   },

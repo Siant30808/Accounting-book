@@ -8,18 +8,20 @@ import React, { useState, useEffect } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TextInput,
   Pressable, SafeAreaView, StatusBar, Image, Modal,
-  KeyboardAvoidingView, Switch, Platform,
+  KeyboardAvoidingView, Switch, Platform, Alert, ActivityIndicator,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import { useBudgetStore }  from '../store/useBudgetStore';
 import { colors, radius, spacing, fontSize, textShadows } from '../theme';
 import { GlassCard }       from '../components/GlassCard';
 import { exportBackup, importBackup } from '../utils/backup';
 import {
-  Bill, CATS, getCatIcon, getBillPaymentMode, periodKey, normalizeCategory,
+  Bill, CATS, getCatIcon, getBillPaymentMode, periodKey, normalizeCategory, MarketHoliday,
 } from '../types';
+import { fetchTaiwanHolidayData } from '../utils/holidays';
 import { fmt } from '../utils/format';
-import { localDateStr, getDueDateInPeriod } from '../utils/period';
+import { localDateStr, getBillDueDate } from '../utils/period';
 import * as ImagePicker from 'expo-image-picker';
 
 // ── 帳單分類 badge 顏色 ──────────────────────────
@@ -34,10 +36,16 @@ function catBadgeStyle(cat: string) {
 }
 
 export function SettingsScreen() {
+  const insets     = useSafeAreaInsets();
+  const safeBottom = Platform.OS === 'android'
+    ? Math.max(insets.bottom, 24)
+    : Math.max(insets.bottom, 12);
+
   const {
     settings, transactions, bgSettings, bills,
     saveSettings, saveBgSettings, clearAll,
     addBill, updateBill, deleteBill, markBillPaid, unmarkBillPaid, getCurrentPeriod,
+    updateRemoteMarketHolidays,
   } = useBudgetStore();
 
   // ── 個人化 + 週期 + 存款 ──
@@ -62,7 +70,12 @@ export function SettingsScreen() {
   const [billDueDay,           setBillDueDay]           = useState('1');
   const [billCat,              setBillCat]              = useState<string>('其他必要支出');
   const [billPaymentMode,      setBillPaymentMode]      = useState<'manual' | 'auto'>('manual');
+  const [billPaymentRule,      setBillPaymentRule]      = useState<'fixedDate' | 'tPlusBusinessDays'>('fixedDate');
+  const [billSettlementDays,   setBillSettlementDays]   = useState('2');
+  const [billRemindDays,       setBillRemindDays]       = useState('3');
   const [confirmUnmarkBillId,  setConfirmUnmarkBillId]  = useState<number | null>(null);
+  // ── 休市日 ──
+  const [fetchingHolidays, setFetchingHolidays] = useState(false);
 
   // 本期資訊
   const currentPeriod = getCurrentPeriod();
@@ -145,6 +158,7 @@ export function SettingsScreen() {
     setEditingBillId(null);
     setBillName(''); setBillAmount(''); setBillDueDay('1');
     setBillCat('其他必要支出'); setBillPaymentMode('manual');
+    setBillPaymentRule('fixedDate'); setBillSettlementDays('2'); setBillRemindDays('3');
     setShowBillModal(true);
   };
   const openEditBillModal = (bill: Bill) => {
@@ -154,19 +168,52 @@ export function SettingsScreen() {
     setBillDueDay(String(bill.dueDay));
     setBillCat(bill.cat);
     setBillPaymentMode(getBillPaymentMode(bill));
+    setBillPaymentRule(bill.paymentRule ?? 'fixedDate');
+    setBillSettlementDays(String(bill.settlementBusinessDays ?? 2));
+    setBillRemindDays(String(bill.remindDaysBefore ?? 3));
     setShowBillModal(true);
   };
-  const handleSaveBill = () => {
-    const amount = parseFloat(billAmount);
-    const dueDay = Math.min(28, Math.max(1, parseInt(billDueDay) || 1));
+  // ── 休市日 handlers ──
+  const handleFetchHolidays = async () => {
+    setFetchingHolidays(true);
+    try {
+      const year = new Date().getFullYear();
+      const data = await fetchTaiwanHolidayData(year);
+      if (data.length === 0) throw new Error('未取得任何休市日資料，請稍後再試。');
+      updateRemoteMarketHolidays(year, data);
+      showToast(`✅ 已更新 ${data.length} 筆 ${year} 年休市日資料`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : '請確認網路連線後再試。';
+      Alert.alert('更新失敗', `無法取得休市日資料，已保留原本資料。\n\n${msg}`);
+    } finally {
+      setFetchingHolidays(false);
+    }
+  };
+
+const handleSaveBill = () => {
+    const amount      = parseFloat(billAmount);
+    const dueDay      = Math.min(28, Math.max(1, parseInt(billDueDay) || 1));
+    const remindDays  = Math.min(14, Math.max(1, parseInt(billRemindDays) || 3));
+    const settleDays  = Math.min(5, Math.max(1, parseInt(billSettlementDays) || 2));
     if (!billName.trim())         { showToast('❌ 請輸入帳單名稱'); return; }
     if (!amount || amount <= 0)   { showToast('❌ 請輸入有效金額'); return; }
-    const isAuto = billPaymentMode === 'auto';
+    const isAuto   = billPaymentMode === 'auto';
+    const extraFields = {
+      paymentRule:           billPaymentRule,
+      settlementBusinessDays: billPaymentRule === 'tPlusBusinessDays' ? settleDays : undefined,
+      remindDaysBefore:      remindDays,
+    };
     if (editingBillId !== null) {
-      updateBill(editingBillId, { name: billName.trim(), amount, dueDay, cat: billCat, paymentMode: billPaymentMode, autoDeduct: isAuto });
+      updateBill(editingBillId, {
+        name: billName.trim(), amount, dueDay, cat: billCat,
+        paymentMode: billPaymentMode, autoDeduct: isAuto, ...extraFields,
+      });
       showToast('✅ 帳單已更新');
     } else {
-      addBill({ name: billName.trim(), amount, dueDay, cat: billCat, paymentMode: billPaymentMode, autoDeduct: isAuto });
+      addBill({
+        name: billName.trim(), amount, dueDay, cat: billCat,
+        paymentMode: billPaymentMode, autoDeduct: isAuto, ...extraFields,
+      });
       showToast('✅ 已新增帳單');
     }
     setShowBillModal(false);
@@ -314,7 +361,7 @@ export function SettingsScreen() {
             bills.map((bill, idx) => {
               const payMode  = getBillPaymentMode(bill);
               const isPaid   = bill.lastPaidPeriodKey === pKey || bill.paidPeriods.includes(currentPeriod.startStr);
-              const dueStr   = localDateStr(getDueDateInPeriod(bill.dueDay, currentPeriod));
+              const dueStr   = localDateStr(getBillDueDate(bill, currentPeriod));
               const isOverdue = !isPaid && dueStr < todayStr;
               const isEnabled = bill.enabled !== false;
               const catStyle  = catBadgeStyle(bill.cat);
@@ -326,7 +373,11 @@ export function SettingsScreen() {
                     <View style={{ flex: 1 }}>
                       <Text style={[sty.billName, !isEnabled && { opacity: 0.45 }]}>{bill.name}</Text>
                       <Text style={[sty.billMeta, !isEnabled && { opacity: 0.45 }]}>
-                        {fmt(bill.amount)}｜每月 {bill.dueDay} 日
+                        {fmt(bill.amount)}｜{
+                          (bill.paymentRule ?? 'fixedDate') === 'tPlusBusinessDays'
+                            ? `每月 ${bill.dueDay} 日執行｜T+${bill.settlementBusinessDays ?? 2} 交割`
+                            : `每月 ${bill.dueDay} 日`
+                        }
                       </Text>
                     </View>
                     {/* 啟用 toggle */}
@@ -521,7 +572,58 @@ export function SettingsScreen() {
         </GlassCard>
 
         {/* ════════════════════
-            6. 資料管理
+            6. 投資交割日設定
+        ════════════════════ */}
+        <GlassCard style={sty.section}>
+          <SectionTitle icon="calendar" title="投資交割日設定" />
+          <Text style={sty.holidayDisclaimer}>
+            用於估算股票定期定額 T+N 扣款日。{'\n'}
+            資料來源為 TWSE 台股開休市日，如遇特殊狀況仍以證券商通知為準。
+          </Text>
+
+          {/* 目前資料狀態 */}
+          <View style={sty.holidayStatusBox}>
+            {settings.marketHolidayYear ? (
+              <>
+                <Text style={sty.holidayStatusText}>
+                  休市日來源：TWSE｜{settings.marketHolidayYear} 年
+                  ·{' '}
+                  {(settings.marketHolidays ?? []).length} 筆
+                </Text>
+                {settings.marketHolidayUpdatedAt && (
+                  <Text style={[sty.holidayStatusText, { color: colors.textMuted, marginTop: 2 }]}>
+                    更新時間：{new Date(settings.marketHolidayUpdatedAt).toLocaleString('zh-TW', {
+                      year: 'numeric', month: '2-digit', day: '2-digit',
+                      hour: '2-digit', minute: '2-digit',
+                    })}
+                  </Text>
+                )}
+              </>
+            ) : (
+              <Text style={[sty.holidayStatusText, { color: colors.textMuted }]}>
+                尚未更新休市日資料
+              </Text>
+            )}
+          </View>
+
+          {/* 操作按鈕 */}
+          <Pressable
+            style={[sty.holidayBtn, fetchingHolidays && { opacity: 0.6 }]}
+            onPress={handleFetchHolidays}
+            disabled={fetchingHolidays}
+          >
+            {fetchingHolidays
+              ? <ActivityIndicator size="small" color={colors.savings} style={{ marginRight: 6 }} />
+              : <Feather name="refresh-cw" size={14} color={colors.savings} style={{ marginRight: 6 }} />
+            }
+            <Text style={[sty.holidayBtnText, { color: colors.savings }]}>
+              {fetchingHolidays ? '更新中…' : '更新今年休市日'}
+            </Text>
+          </Pressable>
+        </GlassCard>
+
+        {/* ════════════════════
+            7. 資料管理
         ════════════════════ */}
         <GlassCard style={sty.section}>
           <SectionTitle icon="hard-drive" title="資料管理" />
@@ -650,7 +752,7 @@ export function SettingsScreen() {
           style={{ flex: 1, justifyContent: 'flex-end' }}
         >
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowBillModal(false)} />
-          <View style={sty.billModal}>
+          <View style={[sty.billModal, { paddingBottom: safeBottom + 16 }]}>
             <View style={sty.dragHandle} />
             <View style={sty.modalTitleRow}>
               <Feather name="file-text" size={18} color={colors.savings} />
@@ -659,7 +761,7 @@ export function SettingsScreen() {
 
             {/* Modal 可滾動內容 */}
             <ScrollView
-              style={{ maxHeight: 480 }}
+              style={{ maxHeight: 560 }}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
             >
@@ -728,6 +830,58 @@ export function SettingsScreen() {
                   );
                 })}
               </View>
+
+              {/* 付款規則 */}
+              <Text style={[sty.modalSubLabel, { marginTop: spacing.lg }]}>付款規則</Text>
+              <View style={sty.payModeRow}>
+                {(['fixedDate', 'tPlusBusinessDays'] as const).map(rule => {
+                  const active = billPaymentRule === rule;
+                  return (
+                    <Pressable
+                      key={rule}
+                      style={[sty.payModeBtn, active && sty.payModeBtnActive]}
+                      onPress={() => setBillPaymentRule(rule)}
+                    >
+                      <Text style={[sty.payModeBtnText, active && { color: colors.savings }]}>
+                        {rule === 'fixedDate' ? '📅 固定日期扣款' : '📈 T+N 營業日交割'}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              {billPaymentRule === 'tPlusBusinessDays' && (
+                <>
+                  <Text style={[sty.modalSubLabel, { marginTop: spacing.md }]}>交割天數</Text>
+                  <View style={[sty.payModeRow, { flexWrap: 'nowrap' }]}>
+                    {([1, 2, 3] as const).map(d => {
+                      const active = parseInt(billSettlementDays) === d;
+                      return (
+                        <Pressable
+                          key={d}
+                          style={[sty.payModeBtn, active && sty.payModeBtnActive, { flex: 1 }]}
+                          onPress={() => setBillSettlementDays(String(d))}
+                        >
+                          <Text style={[sty.payModeBtnText, active && { color: colors.savings }]}>
+                            T+{d}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </>
+              )}
+
+              {/* 提前提醒天數 */}
+              <Text style={[sty.modalSubLabel, { marginTop: spacing.md }]}>提前提醒（天）</Text>
+              <TextInput
+                style={[sty.billInput, { width: 120 }]}
+                placeholder="預設 3 天"
+                placeholderTextColor="#94A3B8"
+                keyboardType="number-pad"
+                maxLength={2}
+                value={billRemindDays}
+                onChangeText={setBillRemindDays}
+              />
             </ScrollView>
 
             <Pressable
@@ -1126,6 +1280,32 @@ const sty = StyleSheet.create({
     width:           '100%',
     gap:             spacing.md,
   },
+
+  // ── 休市日 ──
+  holidayDisclaimer: {
+    fontSize:    fontSize.xs + 1,
+    color:       colors.textMuted,
+    lineHeight:  18,
+    marginBottom: spacing.md,
+  },
+  holidayStatusBox: {
+    backgroundColor: 'rgba(0,0,0,0.04)',
+    borderRadius:    radius.md,
+    padding:         spacing.md,
+    marginBottom:    spacing.md,
+  },
+  holidayStatusText: { fontSize: fontSize.sm, color: colors.textPrimary },
+  holidayBtnRow:     { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: spacing.sm },
+  holidayBtn: {
+    flexDirection:  'row',
+    alignItems:     'center',
+    paddingHorizontal: 14,
+    paddingVertical:    9,
+    borderRadius:   radius.md,
+    borderWidth:    1,
+    borderColor:    colors.savings,
+  },
+  holidayBtnText:     { fontSize: fontSize.sm, fontWeight: '500' },
   unmarkTitle: { fontSize: fontSize.xl, fontWeight: '700', color: colors.textPrimary },
   unmarkSub:   { fontSize: fontSize.md, color: colors.textSecondary },
   unmarkBtns:  { flexDirection: 'row', gap: spacing.md },

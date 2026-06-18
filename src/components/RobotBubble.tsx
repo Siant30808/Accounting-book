@@ -99,11 +99,6 @@ export function RobotBubble({
       pointerEvents={visible ? 'box-none' : 'none'}
       style={[styles.card, animStyle, { left: cardX, top: cardY }]}
     >
-      {/* ── Tone 頂部細色條（rich mode）*/}
-      {tc && (
-        <View style={[styles.accentBar, { backgroundColor: tc.accent }]} />
-      )}
-
       {isRich ? (
         /* ══ RICH MODE ══ */
         <>
@@ -210,23 +205,12 @@ const styles = StyleSheet.create({
     overflow:          'hidden',
   },
 
-  // ── Tone 頂線
-  accentBar: {
-    position:             'absolute',
-    top:                  0,
-    left:                 0,
-    right:                0,
-    height:               3,
-    borderTopLeftRadius:  20,
-    borderTopRightRadius: 20,
-  },
-
   // ── Rich mode
   titleRow: {
     flexDirection:  'row',
     alignItems:     'center',
     gap:            7,
-    marginTop:      6,    // 讓出 accentBar 的 3px + 微間距
+    marginTop:      2,
     marginBottom:   8,
   },
   badge: {

@@ -1,9 +1,10 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TextInput, Pressable,
   ScrollView, SafeAreaView, KeyboardAvoidingView, Platform,
   StatusBar, Modal, TouchableOpacity, Alert,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GlassCard } from '../components/GlassCard';
@@ -25,12 +26,104 @@ const CATS = [
 ] as const;
 
 function getTxCatFromShoppingCat(cat: string, label?: string): string {
-  if (label === '餐飲' || label === '飲料') return '餐費';
+  if (label === '餐飲' || label === '飲料' || label === '餐費') return '餐費';
+  if (label === '食材採購') return '食材採購';
   if (label === '日用品') return '日用品';
+  if (label === '娛樂') return '娛樂';
   if (label === '服飾') return '日用品';
-  if (label === '其他') return '其他必要支出';
+  if (label === '其他' || label === '必要支出') return '其他必要支出';
   const found = CATS.find(c => c.id === cat);
   return found?.txCat ?? '其他必要支出';
+}
+
+type PayT = '現金' | '信用卡';
+const PAY_OPTIONS: PayT[] = ['現金', '信用卡'];
+
+interface TxGroup {
+  txCat:  string;
+  amount: number;
+  note:   string;
+  count:  number;
+}
+
+// ── 轉成記帳預覽 Modal ──
+interface CommitPreviewModalProps {
+  visible:     boolean;
+  groups:      TxGroup[];
+  pay:         PayT;
+  onChangePay: (p: PayT) => void;
+  onConfirm:   () => void;
+  onClose:     () => void;
+}
+
+function CommitPreviewModal({
+  visible, groups, pay, onChangePay, onConfirm, onClose,
+}: CommitPreviewModalProps) {
+  const insets     = useSafeAreaInsets();
+  const safeBottom = Platform.OS === 'android'
+    ? Math.max(insets.bottom, 24)
+    : Math.max(insets.bottom, 12);
+
+  const total = groups.reduce((s, g) => s + g.amount, 0);
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <Pressable style={sty.commitOverlay} onPress={onClose} />
+      <View style={[sty.commitSheet, { paddingBottom: safeBottom + 16 }]}>
+        <View style={sty.commitHandle} />
+
+        <View style={sty.commitHeader}>
+          <Feather name="check-square" size={18} color="#10B981" />
+          <Text style={sty.commitTitle}>轉成記帳</Text>
+          <Pressable onPress={onClose} hitSlop={10} style={{ marginLeft: 'auto' }}>
+            <Feather name="x" size={20} color="#94A3B8" />
+          </Pressable>
+        </View>
+
+        <Text style={sty.commitSub}>
+          將建立 {groups.length} 筆記帳，合計 NT${total.toLocaleString('zh-TW')}
+        </Text>
+
+        <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 220 }}>
+          {groups.map(g => (
+            <View key={g.txCat} style={sty.commitGroupRow}>
+              <View style={sty.commitGroupLeft}>
+                <Text style={sty.commitGroupCat}>{g.txCat}</Text>
+                <Text style={sty.commitGroupNote} numberOfLines={2}>{g.note}</Text>
+              </View>
+              <Text style={sty.commitGroupAmt}>NT${g.amount.toLocaleString('zh-TW')}</Text>
+            </View>
+          ))}
+        </ScrollView>
+
+        {/* 付款方式 */}
+        <View style={sty.commitPayWrap}>
+          <Text style={sty.commitPayLabel}>付款方式</Text>
+          <View style={sty.commitPayRow}>
+            {PAY_OPTIONS.map(p => (
+              <Pressable
+                key={p}
+                style={[sty.commitPayChip, pay === p && sty.commitPayChipActive]}
+                onPress={() => onChangePay(p)}
+              >
+                <Text style={[sty.commitPayChipText, pay === p && { color: '#fff' }]}>{p}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+
+        {/* 按鈕 */}
+        <View style={sty.commitFooter}>
+          <Pressable style={sty.commitCancelBtn} onPress={onClose}>
+            <Text style={sty.commitCancelText}>取消</Text>
+          </Pressable>
+          <Pressable style={sty.commitConfirmBtn} onPress={onConfirm}>
+            <Feather name="check" size={16} color="#fff" />
+            <Text style={sty.commitConfirmText}>確認記帳</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+  );
 }
 
 type CatId  = typeof CATS[number]['id'];
@@ -96,114 +189,6 @@ function Dropdown({ value, options, onChange }: {
   );
 }
 
-// ── 分組計算輔助 ──
-interface TxGroup {
-  txCat:  string;
-  amount: number;
-  note:   string;
-  count:  number;
-}
-
-function buildTxGroups(items: ShoppingItem[]): TxGroup[] {
-  const validItems = items.filter(i => i.amount && i.amount > 0);
-  const groups: Record<string, ShoppingItem[]> = {};
-  validItems.forEach(item => {
-    const key = item.txCat || getTxCatFromShoppingCat(item.cat, item.label);
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(item);
-  });
-  return Object.entries(groups).map(([txCat, groupItems]) => {
-    const names = groupItems.map(i => i.note).filter(Boolean);
-    const note  = names.length <= 4
-      ? names.join('、')
-      : `${names.slice(0, 4).join('、')} 等 ${names.length} 項`;
-    return {
-      txCat,
-      amount: groupItems.reduce((s, i) => s + (i.amount ?? 0), 0),
-      note,
-      count:  groupItems.length,
-    };
-  });
-}
-
-// ── 轉成記帳預覽 Modal ──
-type PayT = '現金' | '信用卡';
-const PAY_OPTIONS: PayT[] = ['現金', '信用卡'];
-
-interface CommitPreviewModalProps {
-  visible:     boolean;
-  groups:      TxGroup[];
-  pay:         PayT;
-  onChangePay: (p: PayT) => void;
-  onConfirm:   () => void;
-  onClose:     () => void;
-}
-
-function CommitPreviewModal({
-  visible, groups, pay, onChangePay, onConfirm, onClose,
-}: CommitPreviewModalProps) {
-  const total = groups.reduce((s, g) => s + g.amount, 0);
-  return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <Pressable style={sty.modalOverlay} onPress={onClose} />
-      <View style={sty.modalSheet}>
-        <View style={sty.modalHandle} />
-
-        <View style={sty.modalHeader}>
-          <Feather name="check-square" size={18} color="#10B981" />
-          <Text style={sty.modalTitle}>轉成記帳</Text>
-          <Pressable onPress={onClose} hitSlop={10} style={{ marginLeft: 'auto' }}>
-            <Feather name="x" size={20} color="#94A3B8" />
-          </Pressable>
-        </View>
-
-        <Text style={sty.commitPreviewSub}>
-          將建立 {groups.length} 筆記帳，合計 NT${total.toLocaleString('zh-TW')}
-        </Text>
-
-        <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 260 }}>
-          {groups.map(g => (
-            <View key={g.txCat} style={sty.commitGroupRow}>
-              <View style={sty.commitGroupLeft}>
-                <Text style={sty.commitGroupCat}>{g.txCat}</Text>
-                <Text style={sty.commitGroupNote} numberOfLines={2}>{g.note}</Text>
-              </View>
-              <Text style={sty.commitGroupAmt}>NT${g.amount.toLocaleString('zh-TW')}</Text>
-            </View>
-          ))}
-        </ScrollView>
-
-        {/* 付款方式 */}
-        <View style={sty.commitPayWrap}>
-          <Text style={sty.commitPayLabel}>付款方式</Text>
-          <View style={sty.commitPayRow}>
-            {PAY_OPTIONS.map(p => (
-              <Pressable
-                key={p}
-                style={[sty.commitPayChip, pay === p && sty.commitPayChipActive]}
-                onPress={() => onChangePay(p)}
-              >
-                <Text style={[sty.commitPayChipText, pay === p && { color: '#fff' }]}>{p}</Text>
-              </Pressable>
-            ))}
-          </View>
-        </View>
-
-        {/* 按鈕列 */}
-        <View style={sty.commitFooter}>
-          <Pressable style={sty.commitCancelBtn} onPress={onClose}>
-            <Text style={sty.commitCancelText}>取消</Text>
-          </Pressable>
-          <Pressable style={sty.commitConfirmBtn} onPress={onConfirm}>
-            <Feather name="check" size={16} color="#fff" />
-            <Text style={sty.commitConfirmText}>確認記帳</Text>
-          </Pressable>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
 // ── 編輯常買品項 Modal ──
 interface EditFrequentModalProps {
   visible:        boolean;
@@ -217,6 +202,11 @@ interface EditFrequentModalProps {
 function EditFrequentModal({
   visible, items, onClose, onAdd, onDelete, onTogglePin,
 }: EditFrequentModalProps) {
+  const insets     = useSafeAreaInsets();
+  const safeBottom = Platform.OS === 'android'
+    ? Math.max(insets.bottom, 24)
+    : Math.max(insets.bottom, 12);
+
   const [newName,   setNewName]   = useState('');
   const [newCat,    setNewCat]    = useState<CatId>('meal');
   const [newBuyer,  setNewBuyer]  = useState<BuyerT | ''>('');
@@ -243,7 +233,7 @@ function EditFrequentModal({
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <Pressable style={sty.modalOverlay} onPress={onClose} />
-      <View style={sty.modalSheet}>
+      <View style={[sty.modalSheet, { paddingBottom: safeBottom + 16 }]}>
         <View style={sty.modalHandle} />
 
         {/* 標題 */}
@@ -383,7 +373,6 @@ export function ShoppingScreen() {
   const [frequentItems,    setFrequentItems]    = useState<FrequentItem[]>([]);
   const [showEditFrequent, setShowEditFrequent] = useState(false);
   const [showCommitModal,  setShowCommitModal]  = useState(false);
-  const [commitGroups,     setCommitGroups]     = useState<TxGroup[]>([]);
   const [shoppingPay,      setShoppingPay]      = useState<PayT>('現金');
 
   const itemsLoaded    = useRef(false);
@@ -485,8 +474,11 @@ export function ShoppingScreen() {
   const hasNote     = note.trim().length > 0;
   const isEditing   = editingId !== null;
 
-  const totalAll   = items.reduce((s, i) => s + (i.amount ?? 0), 0);
-  const noAmtCount = items.filter(i => !i.amount).length;
+  const checkedWithAmt = items.filter(i => i.checked && i.amount && i.amount > 0);
+  const totalAll       = checkedWithAmt.reduce((s, i) => s + (i.amount ?? 0), 0);
+  const pendingCount   = items.filter(i => !i.checked).length;
+  const doneCount      = items.filter(i => i.checked).length;
+  const noAmtCount     = items.filter(i => !i.amount).length;
 
   const resetForm = useCallback(() => {
     setNote('');
@@ -574,6 +566,64 @@ export function ShoppingScreen() {
     resetForm();
   }, [resetForm]);
 
+  // ── 轉成記帳：分組計算 ──
+  const groupedTxs = useMemo<TxGroup[]>(() => {
+    const validItems = items.filter(i => i.checked && i.amount && i.amount > 0);
+    const groups: Record<string, ShoppingItem[]> = {};
+    validItems.forEach(item => {
+      const key = item.txCat || getTxCatFromShoppingCat(item.cat, item.label);
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(item);
+    });
+    return Object.entries(groups).map(([txCat, groupItems]) => {
+      const names = groupItems.map(i => i.note?.trim()).filter(Boolean);
+      const note  = names.length <= 4
+        ? names.join('、')
+        : `${names.slice(0, 4).join('、')} 等 ${names.length} 項`;
+      return {
+        txCat,
+        amount: groupItems.reduce((s, i) => s + (i.amount ?? 0), 0),
+        note:   note || `購物清單 ${groupItems.length} 項`,
+        count:  groupItems.length,
+      };
+    });
+  }, [items]);
+
+  const handleCommit = useCallback(() => {
+    if (groupedTxs.length === 0) return;
+    setShowCommitModal(true);
+  }, [groupedTxs]);
+
+  const handleCommitConfirm = useCallback(() => {
+    const now  = new Date();
+    const date = localDateStr(now);
+    const time = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+
+    groupedTxs.forEach(group => {
+      addTransaction({
+        type:   'expense',
+        amount: group.amount,
+        cat:    group.txCat,
+        pay:    shoppingPay,
+        note:   group.note,
+        date,
+        time,
+      });
+    });
+
+    setShowCommitModal(false);
+
+    const total = groupedTxs.reduce((s, g) => s + g.amount, 0);
+    Alert.alert(
+      '已轉成記帳 ✅',
+      `已建立 ${groupedTxs.length} 筆記帳，合計 NT$${total.toLocaleString('zh-TW')}。\n要清空購物清單嗎？`,
+      [
+        { text: '保留清單', style: 'cancel' },
+        { text: '清空清單', style: 'destructive', onPress: handleClearAll },
+      ],
+    );
+  }, [groupedTxs, shoppingPay, addTransaction, handleClearAll]);
+
   // ── 常買品項管理 handlers ──
   const handleFrequentAdd = useCallback((
     item: Omit<FrequentItem, 'id' | 'useCount' | 'lastUsedAt'>,
@@ -603,46 +653,6 @@ export function ShoppingScreen() {
     setFrequentItems(prev => prev.map(i => i.id === id ? { ...i, userPinned: !i.userPinned } : i));
   }, []);
 
-  // ── 轉成記帳：開預覽 Modal ──
-  const handleCommit = useCallback(() => {
-    const groups = buildTxGroups(items);
-    if (groups.length === 0) return;
-    setCommitGroups(groups);
-    setShowCommitModal(true);
-  }, [items]);
-
-  // ── 確認後實際新增記帳 ──
-  const handleCommitConfirm = useCallback(() => {
-    const now = new Date();
-    const hh  = String(now.getHours()).padStart(2, '0');
-    const mm  = String(now.getMinutes()).padStart(2, '0');
-    const date = localDateStr(now);
-    const time  = `${hh}:${mm}`;
-
-    commitGroups.forEach(group => {
-      addTransaction({
-        type:   'expense',
-        amount: group.amount,
-        cat:    group.txCat,
-        pay:    shoppingPay,
-        note:   group.note || `購物清單 ${group.count} 項`,
-        date,
-        time,
-      });
-    });
-
-    setShowCommitModal(false);
-
-    const total = commitGroups.reduce((s, g) => s + g.amount, 0);
-    Alert.alert(
-      '已轉成記帳 ✅',
-      `已建立 ${commitGroups.length} 筆記帳，合計 NT$${total.toLocaleString('zh-TW')}。\n要清空購物清單嗎？`,
-      [
-        { text: '保留清單', style: 'cancel' },
-        { text: '清空', style: 'destructive', onPress: handleClearAll },
-      ],
-    );
-  }, [commitGroups, shoppingPay, addTransaction, handleClearAll]);
 
   return (
     <SafeAreaView style={sty.root}>
@@ -711,50 +721,6 @@ export function ShoppingScreen() {
             </View>
           </GlassCard>
 
-          {/* ── 常買品項 chips ── */}
-          <View style={sty.freqHeader}>
-            <Text style={sty.sectionTitle}>常買品項</Text>
-            <Pressable
-              style={sty.freqEditBtn}
-              onPress={() => setShowEditFrequent(true)}
-            >
-              <Feather name="settings" size={13} color="#8B5CF6" />
-              <Text style={sty.freqEditText}>管理</Text>
-            </Pressable>
-          </View>
-
-          <ScrollView
-            horizontal showsHorizontalScrollIndicator={false}
-            style={sty.freqScroll}
-            contentContainerStyle={{ paddingHorizontal: 24, gap: 8 }}
-          >
-            {visibleFrequentItems.length === 0 ? (
-              <Pressable style={sty.freqEmptyChip} onPress={() => setShowEditFrequent(true)}>
-                <Feather name="plus" size={13} color="#8B5CF6" />
-                <Text style={sty.freqEditChipText}>新增常買品項</Text>
-              </Pressable>
-            ) : (
-              <>
-                {visibleFrequentItems.map(fi => {
-                  const cat = CATS.find(c => c.id === fi.cat);
-                  return (
-                    <Pressable key={fi.id} style={sty.freqChip} onPress={() => handleFrequentChip(fi)}>
-                      <Text style={{ fontSize: 14 }}>{cat?.icon ?? '🛍️'}</Text>
-                      <Text style={sty.freqChipText}>{fi.name}</Text>
-                      {fi.userPinned && (
-                        <Feather name="star" size={11} color="#F59E0B" />
-                      )}
-                    </Pressable>
-                  );
-                })}
-                <Pressable style={sty.freqEditChip} onPress={() => setShowEditFrequent(true)}>
-                  <Feather name="edit-2" size={13} color="#8B5CF6" />
-                  <Text style={sty.freqEditChipText}>編輯</Text>
-                </Pressable>
-              </>
-            )}
-          </ScrollView>
-
           {/* ── 分類 chips ── */}
           <Text style={sty.sectionTitle}>分類</Text>
           <ScrollView
@@ -806,6 +772,41 @@ export function ShoppingScreen() {
               </Pressable>
             )}
           </View>
+
+          {/* ── 常買品項 chips ── */}
+          <View style={sty.freqHeader}>
+            <Text style={sty.sectionTitle}>常買品項</Text>
+            <Pressable style={sty.freqEditBtn} onPress={() => setShowEditFrequent(true)}>
+              <Feather name="settings" size={13} color="#8B5CF6" />
+              <Text style={sty.freqEditText}>管理</Text>
+            </Pressable>
+          </View>
+
+          <ScrollView
+            horizontal showsHorizontalScrollIndicator={false}
+            style={sty.freqScroll}
+            contentContainerStyle={{ paddingHorizontal: 24, gap: 8 }}
+          >
+            {visibleFrequentItems.length === 0 ? (
+              <Pressable style={sty.freqEmptyChip} onPress={() => setShowEditFrequent(true)}>
+                <Feather name="plus" size={13} color="#8B5CF6" />
+                <Text style={sty.freqEditChipText}>新增常買品項</Text>
+              </Pressable>
+            ) : (
+              <>
+                {visibleFrequentItems.map(fi => {
+                  const cat = CATS.find(c => c.id === fi.cat);
+                  return (
+                    <Pressable key={fi.id} style={sty.freqChip} onPress={() => handleFrequentChip(fi)}>
+                      <Text style={{ fontSize: 14 }}>{cat?.icon ?? '🛍️'}</Text>
+                      <Text style={sty.freqChipText}>{fi.name}</Text>
+                      {fi.userPinned && <Feather name="star" size={11} color="#F59E0B" />}
+                    </Pressable>
+                  );
+                })}
+              </>
+            )}
+          </ScrollView>
 
           {/* ── 購物清單 ── */}
           {items.length > 0 && (
@@ -865,24 +866,48 @@ export function ShoppingScreen() {
                 colorTop="rgba(255,255,255,0.76)"
                 colorBot="rgba(248,250,252,0.35)"
               >
-                <View>
-                  <Text style={sty.totalLabel}>本次合計</Text>
+                <View style={sty.totalStats}>
+                  {pendingCount > 0 && (
+                    <View style={sty.totalStatRow}>
+                      <View style={[sty.totalStatDot, { backgroundColor: '#94A3B8' }]} />
+                      <Text style={sty.totalStatText}>待買 {pendingCount} 項</Text>
+                    </View>
+                  )}
+                  {doneCount > 0 && (
+                    <View style={sty.totalStatRow}>
+                      <View style={[sty.totalStatDot, { backgroundColor: '#10B981' }]} />
+                      <Text style={sty.totalStatText}>已買 {doneCount} 項</Text>
+                    </View>
+                  )}
                   {noAmtCount > 0 && (
-                    <Text style={sty.totalSub}>未填金額：{noAmtCount} 項</Text>
+                    <View style={sty.totalStatRow}>
+                      <View style={[sty.totalStatDot, { backgroundColor: '#CBD5E1' }]} />
+                      <Text style={sty.totalStatText}>未填金額 {noAmtCount} 項</Text>
+                    </View>
                   )}
                 </View>
-                <Text style={sty.totalAmt}>NT${totalAll.toLocaleString('zh-TW')}</Text>
+                <View style={sty.totalAmtWrap}>
+                  <Text style={sty.totalLabel}>已買合計</Text>
+                  <Text style={sty.totalAmt}>NT${totalAll.toLocaleString('zh-TW')}</Text>
+                </View>
               </GlassCard>
 
-              {/* ── 轉成記帳 ── */}
+              {/* ── 轉成記帳按鈕 ── */}
               <View style={sty.commitWrap}>
+                {groupedTxs.length === 0 && checkedWithAmt.length === 0 && (
+                  <Text style={sty.commitHint}>勾選已買且填入金額的項目，即可轉成記帳</Text>
+                )}
                 <Pressable
-                  style={[sty.commitBtn, totalAll <= 0 && sty.commitBtnDisabled]}
+                  style={[sty.commitBtn, groupedTxs.length === 0 && sty.commitBtnDisabled]}
                   onPress={handleCommit}
-                  disabled={totalAll <= 0}
+                  disabled={groupedTxs.length === 0}
                 >
                   <Feather name="check-square" size={18} color="#fff" />
-                  <Text style={sty.commitBtnText}>轉成記帳</Text>
+                  <Text style={sty.commitBtnText}>
+                    {groupedTxs.length > 0
+                      ? `轉成記帳（${groupedTxs.length} 筆）`
+                      : '轉成記帳'}
+                  </Text>
                 </Pressable>
               </View>
             </>
@@ -895,7 +920,7 @@ export function ShoppingScreen() {
       {/* ── 轉成記帳預覽 Modal ── */}
       <CommitPreviewModal
         visible={showCommitModal}
-        groups={commitGroups}
+        groups={groupedTxs}
         pay={shoppingPay}
         onChangePay={setShoppingPay}
         onConfirm={handleCommitConfirm}
@@ -1178,13 +1203,19 @@ const sty = StyleSheet.create({
     paddingVertical:   16,
     paddingHorizontal: 20,
     overflow:          'hidden',
+    gap:               12,
   },
-  totalLabel: { fontSize: 15, fontWeight: '700', color: '#475569' },
-  totalSub:   { fontSize: 12, color: '#CBD5E1', marginTop: 3 },
-  totalAmt:   { fontSize: 24, fontWeight: '800', color: '#1E293B' },
+  totalStats:    { flex: 1, gap: 5 },
+  totalStatRow:  { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  totalStatDot:  { width: 7, height: 7, borderRadius: 4 },
+  totalStatText: { fontSize: 12, fontWeight: '600', color: '#64748B' },
+  totalAmtWrap:  { alignItems: 'flex-end' },
+  totalLabel:    { fontSize: 12, fontWeight: '600', color: '#94A3B8', marginBottom: 2 },
+  totalAmt:      { fontSize: 24, fontWeight: '800', color: '#1E293B' },
 
-  // 轉成記帳
-  commitWrap: { marginHorizontal: 24, marginBottom: 10 },
+  // 轉成記帳按鈕
+  commitWrap: { marginHorizontal: 24, marginBottom: 10, gap: 8 },
+  commitHint: { fontSize: 12, color: '#94A3B8', textAlign: 'center', fontWeight: '500' },
   commitBtn: {
     flexDirection:   'row',
     alignItems:      'center',
@@ -1197,44 +1228,73 @@ const sty = StyleSheet.create({
   commitBtnDisabled: { backgroundColor: 'rgba(148,163,184,0.45)' },
   commitBtnText:     { fontSize: 16, fontWeight: '700', color: '#fff' },
 
-  // ── 轉成記帳預覽 Modal ──
-  commitPreviewSub: {
-    fontSize: 13, color: '#94A3B8', fontWeight: '600', marginBottom: 14,
+  // 轉成記帳預覽 Modal
+  commitOverlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(0,0,0,0.30)',
   },
-  commitGroupRow: {
-    flexDirection:     'row',
-    justifyContent:    'space-between',
-    alignItems:        'flex-start',
-    backgroundColor:   'rgba(248,250,252,0.90)',
-    borderRadius:      14,
-    padding:           12,
-    marginBottom:      8,
-    gap:               12,
+  commitSheet: {
+    position:             'absolute',
+    bottom:               0,
+    left:                 0,
+    right:                0,
+    backgroundColor:      'rgba(255,255,255,0.97)',
+    borderTopLeftRadius:  32,
+    borderTopRightRadius: 32,
+    paddingHorizontal:    20,
+    paddingBottom:        Platform.OS === 'android' ? 28 : 20,
+    shadowColor:          '#000',
+    shadowOffset:         { width: 0, height: -8 },
+    shadowOpacity:        0.10,
+    shadowRadius:         22,
+    elevation:            18,
   },
-  commitGroupLeft:  { flex: 1, minWidth: 0 },
-  commitGroupCat:   { fontSize: 14, fontWeight: '800', color: '#1E293B', marginBottom: 2 },
-  commitGroupNote:  { fontSize: 12, color: '#94A3B8', fontWeight: '500' },
-  commitGroupAmt:   { fontSize: 15, fontWeight: '800', color: '#10B981', flexShrink: 0 },
+  commitHandle: {
+    width:           40,
+    height:          4,
+    borderRadius:    2,
+    backgroundColor: '#E2E8F0',
+    alignSelf:       'center',
+    marginTop:       12,
+    marginBottom:    14,
+  },
+  commitHeader: {
+    flexDirection: 'row',
+    alignItems:    'center',
+    gap:           8,
+    marginBottom:  4,
+  },
+  commitTitle: { fontSize: 18, fontWeight: '800', color: '#1E293B' },
+  commitSub:   { fontSize: 13, color: '#94A3B8', fontWeight: '600', marginBottom: 14 },
 
-  commitPayWrap: {
-    marginTop:    14,
-    marginBottom: 4,
+  commitGroupRow: {
+    flexDirection:   'row',
+    justifyContent:  'space-between',
+    alignItems:      'flex-start',
+    backgroundColor: 'rgba(248,250,252,0.90)',
+    borderRadius:    14,
+    padding:         12,
+    marginBottom:    8,
+    gap:             12,
   },
+  commitGroupLeft: { flex: 1, minWidth: 0 },
+  commitGroupCat:  { fontSize: 14, fontWeight: '800', color: '#1E293B', marginBottom: 2 },
+  commitGroupNote: { fontSize: 12, color: '#94A3B8', fontWeight: '500' },
+  commitGroupAmt:  { fontSize: 15, fontWeight: '800', color: '#10B981', flexShrink: 0 },
+
+  commitPayWrap:  { marginTop: 14, marginBottom: 4 },
   commitPayLabel: { fontSize: 13, fontWeight: '700', color: '#64748B', marginBottom: 8 },
   commitPayRow:   { flexDirection: 'row', gap: 10 },
   commitPayChip: {
-    paddingVertical:   8,
-    paddingHorizontal: 18,
+    paddingVertical:   9,
+    paddingHorizontal: 20,
     borderRadius:      20,
     backgroundColor:   'rgba(248,250,252,0.94)',
     borderWidth:       1,
     borderColor:       'rgba(0,0,0,0.07)',
   },
-  commitPayChipActive: {
-    backgroundColor: '#8B5CF6',
-    borderColor:     '#8B5CF6',
-  },
-  commitPayChipText: { fontSize: 14, fontWeight: '700', color: '#475569' },
+  commitPayChipActive: { backgroundColor: '#8B5CF6', borderColor: '#8B5CF6' },
+  commitPayChipText:   { fontSize: 14, fontWeight: '700', color: '#475569' },
 
   commitFooter: {
     flexDirection:  'row',

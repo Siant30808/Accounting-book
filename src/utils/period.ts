@@ -1,4 +1,4 @@
-import { Period } from '../types';
+import { Period, Bill, MarketHoliday, addBusinessDays } from '../types';
 
 export function localDateStr(d: Date): string {
   return (
@@ -65,6 +65,24 @@ export function getDueDateInPeriod(dueDay: number, p: Period): Date {
   const d1 = new Date(p.start.getFullYear(), p.start.getMonth(), dueDay);
   if (d1 >= p.start && d1 <= p.end) return d1;
   return new Date(p.start.getFullYear(), p.start.getMonth() + 1, dueDay);
+}
+
+/** 取得帳單在本期的執行日（即 bill.dueDay 落在本期的日期）
+ *  fixedDate → 執行日 = 扣款日
+ *  tPlusBusinessDays → 執行日 = 交易日，實際扣款另計 */
+export function getBillExecutionDate(bill: Bill, period: Period): Date {
+  return getDueDateInPeriod(bill.dueDay, period);
+}
+
+/** 取得帳單在本期的實際扣款日
+ *  fixedDate → 同執行日
+ *  tPlusBusinessDays → 執行日後第 settlementBusinessDays 個營業日（排除週末及 holidays）*/
+export function getBillDueDate(bill: Bill, period: Period, holidays: MarketHoliday[] = []): Date {
+  const exec = getBillExecutionDate(bill, period);
+  if ((bill.paymentRule ?? 'fixedDate') === 'tPlusBusinessDays') {
+    return addBusinessDays(exec, bill.settlementBusinessDays ?? 2, holidays);
+  }
+  return exec;
 }
 
 export function getAllPeriods(txDates: string[], payday: number): Period[] {
